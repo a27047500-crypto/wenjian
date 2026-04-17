@@ -755,8 +755,39 @@
 
     const originalSave = app.save.bind(app);
 
+    async function gzipBytes(text) {
+      const bytes = new TextEncoder().encode(text);
+      const cs = new CompressionStream('gzip');
+      const writer = cs.writable.getWriter();
+      writer.write(bytes);
+      writer.close();
+      const chunks = [];
+      const reader = cs.readable.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const out = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) { out.set(c, off); off += c.length; }
+      return out;
+    }
+
     async function buildSnapshotRequest(data, baseRevision) {
       const rawText = JSON.stringify({ data, baseRevision });
+      if (rawText.length > 32768 && typeof CompressionStream === 'function') {
+        try {
+          const compressed = await gzipBytes(rawText);
+          return {
+            body: compressed,
+            headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' },
+          };
+        } catch (_) {
+          // fall through to uncompressed
+        }
+      }
       return {
         body: rawText,
         headers: { 'Content-Type': 'application/json' },

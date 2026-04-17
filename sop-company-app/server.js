@@ -319,7 +319,7 @@ function buildSpecialBoardChangesPayloadFromStore(store, queryRevision, includeD
   };
 }
 
-async function writeSpecialBoardStoreToFile(data, user, options = {}) {
+function writeSpecialBoardStoreToFile(data, user, options = {}) {
   const current = readSpecialBoardStoreFromFile();
   const normalizedData = normalizeSpecialBoardData(data);
   const currentHasData = hasSpecialBoardData(current.data);
@@ -345,7 +345,7 @@ async function writeSpecialBoardStoreToFile(data, user, options = {}) {
     updatedBy: String(user?.username || "system"),
     data: normalizedData,
   };
-  await fs.promises.writeFile(SPECIAL_BOARD_FILE, JSON.stringify(payload), "utf8");
+  fs.writeFileSync(SPECIAL_BOARD_FILE, JSON.stringify(payload), "utf8");
   broadcastSpecialBoardUpdate(payload);
   return { conflict: false, current: payload };
 }
@@ -462,7 +462,7 @@ async function buildSpecialBoardChangesPayload(queryRevision, includeData = fals
 
 async function writeSpecialBoardStore(data, user, options = {}) {
   if (SPECIAL_BOARD_STORAGE !== "postgres") {
-    return await writeSpecialBoardStoreToFile(data, user, options);
+    return writeSpecialBoardStoreToFile(data, user, options);
   }
 
   await ensureSpecialBoardDbReady();

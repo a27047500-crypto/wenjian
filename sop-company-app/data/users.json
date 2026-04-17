@@ -1,0 +1,121 @@
+[
+  {
+    "username": "admin",
+    "displayName": "系统管理员",
+    "role": "admin",
+    "department": "管理中心",
+    "passwordHash": "pbkdf2$210000$b795b135de65b99ca7a0324843892c38$42dd270f92b0770ba79bf47b1199f03c1be0171bd8d9e0e98a00668a31a58e29"
+  },
+  {
+    "username": "dept01",
+    "displayName": "综合管理部专员",
+    "role": "editor",
+    "department": "综合管理部",
+    "passwordHash": "d4b597dbdea5e461d05c086ff56199f52321cd2539fc77c34a8ce3875ba5b71b"
+  },
+  {
+    "username": "dept02",
+    "displayName": "人力资源部专员",
+    "role": "editor",
+    "department": "人力资源部",
+    "passwordHash": "65fe998d8f74e356e1fd200421251edaa5a03857309d8d365563aaf26f8b3beb"
+  },
+  {
+    "username": "dept03",
+    "displayName": "财务部专员",
+    "role": "editor",
+    "department": "财务部",
+    "passwordHash": "394e8fb81af0d05d922da5862b9a384988e7c125d99046d930086b8e70a8b970"
+  },
+  {
+    "username": "dept04",
+    "displayName": "采购部专员",
+    "role": "editor",
+    "department": "采购部",
+    "passwordHash": "573ec5e3c8b712f0c6307b550e77381ee231071d8d277702102c987178a8edd4"
+  },
+  {
+    "username": "dept05",
+    "displayName": "生产部专员",
+    "role": "editor",
+    "department": "生产部",
+    "passwordHash": "0c9564afeb35dbd0df564ba669bd61fe0632201626e8544a218001c1dee700c6"
+  },
+  {
+    "username": "dept06",
+    "displayName": "品质部专员",
+    "role": "editor",
+    "department": "品质部",
+    "passwordHash": "39a8b2e89864fbae57528da57f133305607a69fdb28e53f17eb2598095842071"
+  },
+  {
+    "username": "dept07",
+    "displayName": "工程部专员",
+    "role": "editor",
+    "department": "工程部",
+    "passwordHash": "ebaa4f51e0bdddf26de9107854786c1860f1a8294d7a885f5c062dfc22c5c558"
+  },
+  {
+    "username": "dept08",
+    "displayName": "研发部专员",
+    "role": "editor",
+    "department": "研发部",
+    "passwordHash": "57b1adbc9b366fb3190b615bfdf8eb7e021c2d8e79cfe8df0810d4fe0ec84387"
+  },
+  {
+    "username": "dept09",
+    "displayName": "销售部专员",
+    "role": "editor",
+    "department": "销售部",
+    "passwordHash": "d316336b19bfd682baa5c5b3746568e93c39390bd79eb42358e10b7b90b46ab5"
+  },
+  {
+    "username": "dept10",
+    "displayName": "市场部专员",
+    "role": "editor",
+    "department": "市场部",
+    "passwordHash": "00ad54ec18e481aa3d9a09511c2f44b7c8b1e24704b02bbbcb3ae3ab58207004"
+  },
+  {
+    "username": "dept11",
+    "displayName": "仓储物流部专员",
+    "role": "editor",
+    "department": "仓储物流部",
+    "passwordHash": "4bc58256d01069267159482524bf99beaccb3913fd8cc27498b86479926051a7"
+  },
+  {
+    "username": "dept12",
+    "displayName": "信息技术部专员",
+    "role": "editor",
+    "department": "信息技术部",
+    "passwordHash": "e6bd565d6b6e060283457fad96ce5fa88e5aaa84cfd5df5d54ce8d3ca258058a"
+  },
+  {
+    "username": "dept13",
+    "displayName": "设备部专员",
+    "role": "editor",
+    "department": "设备部",
+    "passwordHash": "8b270a59d0ebd2d168727c380b5643adb6aaa464a309397b5fb4f721029e013e"
+  },
+  {
+    "username": "dept14",
+    "displayName": "安环部专员",
+    "role": "editor",
+    "department": "安环部",
+    "passwordHash": "02102cd9f59d40380fca49cc055a6229b62f526f7a95312663e629142527e7fc"
+  },
+  {
+    "username": "dept15",
+    "displayName": "客服部专员",
+    "role": "editor",
+    "department": "客服部",
+    "passwordHash": "f61320917fcfe9a64cc3d1902c79822e718865604948eebca768a3b49b5b6f39"
+  },
+  {
+    "username": "dept16",
+    "displayName": "法务审计部专员",
+    "role": "editor",
+    "department": "法务审计部",
+    "passwordHash": "b0518ecfc89674b18fa0adde2c97c9540d3d94a18d35c18b818b903f176f5e09"
+  }
+]

@@ -1,0 +1,796 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>流程文件管理平台</title>
+  <meta name="theme-color" content="#f5f5f7">
+  <style>
+    :root {
+      --bg: #f3f4f6;
+      --panel: rgba(255, 255, 255, 0.86);
+      --panel-solid: rgba(255, 255, 255, 0.95);
+      --line: rgba(15, 23, 42, 0.08);
+      --text: #101214;
+      --muted: #6e6e73;
+      --accent: #0071e3;
+      --shadow-xl: 0 24px 70px rgba(15, 23, 42, 0.08);
+      --shadow-md: 0 14px 32px rgba(15, 23, 42, 0.06);
+      --radius-xl: 28px;
+      --radius-lg: 22px;
+      --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--font-ui);
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(0, 113, 227, 0.16), transparent 26%),
+        radial-gradient(circle at top right, rgba(82, 196, 255, 0.12), transparent 18%),
+        linear-gradient(180deg, #fbfbfd 0%, var(--bg) 100%);
+    }
+
+    .shell {
+      min-height: 100vh;
+      padding: 22px;
+    }
+
+    .topbar,
+    .panel,
+    .login-card {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      box-shadow: var(--shadow-xl);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 16px 18px;
+      border-radius: 24px;
+      margin-bottom: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .top-center-slot {
+      flex: 0 0 auto;
+      display: flex;
+      justify-content: flex-start;
+      align-items: center;
+      margin-left: 16px;
+    }
+
+    .special-entry {
+      min-height: 42px;
+      padding: 0 22px;
+      border-radius: 12px;
+      border: 2px solid rgba(0, 113, 227, 0.86);
+      background: rgba(255, 255, 255, 0.92);
+      color: #0a63c8;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      transition: all .18s ease;
+      box-shadow: 0 8px 20px rgba(0, 113, 227, 0.14);
+      white-space: nowrap;
+    }
+
+    .special-entry:hover {
+      transform: translateY(-1px);
+      background: #fff;
+      box-shadow: 0 14px 28px rgba(0, 113, 227, 0.2);
+    }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      background: linear-gradient(135deg, #0a84ff 0%, #0071e3 100%);
+      box-shadow: 0 16px 32px rgba(0, 113, 227, 0.24);
+    }
+
+    .brand-copy h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.03em;
+    }
+
+    .brand-copy p {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .top-actions,
+    .workspace-actions,
+    .toolbar,
+    .doc-actions,
+    .session-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .btn,
+    .ghost,
+    .input,
+    .select,
+    .action-link,
+    .doc-actions button {
+      min-height: 42px;
+      border-radius: 14px;
+      border: 1px solid transparent;
+      font: inherit;
+      transition: all .18s ease;
+    }
+
+    .btn,
+    .ghost,
+    .action-link,
+    .doc-actions button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 16px;
+      text-decoration: none;
+      cursor: pointer;
+      background: #fff;
+      color: var(--text);
+      border-color: var(--line);
+    }
+
+    .btn,
+    .action-link.primary,
+    .doc-actions button.primary {
+      color: #fff;
+      border-color: transparent;
+      background: linear-gradient(135deg, #0a84ff 0%, #0071e3 100%);
+      box-shadow: 0 18px 36px rgba(0, 113, 227, 0.18);
+    }
+
+    .ghost {
+      background: rgba(255, 255, 255, 0.86);
+    }
+
+    .input,
+    .select {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.86);
+      border-color: var(--line);
+      padding: 0 14px;
+      outline: none;
+    }
+
+    .dashboard {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.78fr);
+      gap: 18px;
+    }
+
+    .panel {
+      border-radius: var(--radius-xl);
+      padding: 20px;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .panel-title h2,
+    .panel-title h3 {
+      margin: 0;
+      letter-spacing: -0.04em;
+    }
+
+    .panel-title h2 {
+      font-size: 38px;
+      line-height: 1;
+    }
+
+    .panel-title h3 {
+      font-size: 24px;
+      line-height: 1.1;
+    }
+
+    .panel-title p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .stat-card,
+    .doc-card,
+    .list-card,
+    .account-card {
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.95);
+      box-shadow: var(--shadow-md);
+    }
+
+    .stat-card {
+      padding: 16px 18px;
+    }
+
+    .stat-card strong {
+      display: block;
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      margin-bottom: 4px;
+    }
+
+    .stat-card span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toolbar {
+      margin-bottom: 18px;
+      align-items: center;
+    }
+
+    .input {
+      flex: 1 1 240px;
+      min-width: 220px;
+    }
+
+    .select {
+      min-width: 132px;
+    }
+
+    .doc-list,
+    .review-list,
+    .people-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .doc-card {
+      padding: 18px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .doc-meta strong {
+      display: block;
+      font-size: 18px;
+      line-height: 1.3;
+      margin-bottom: 8px;
+    }
+
+    .doc-meta p,
+    .account-card p,
+    .list-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .doc-badges {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid transparent;
+    }
+
+    .badge.blue { color: #0a63c8; background: rgba(0, 113, 227, 0.1); }
+    .badge.green { color: #157c31; background: rgba(52, 199, 89, 0.12); }
+    .badge.orange { color: #b36a00; background: rgba(255, 159, 10, 0.14); }
+    .badge.red { color: #ba251a; background: rgba(255, 69, 58, 0.12); }
+    .badge.gray { color: #4b5563; background: rgba(100, 116, 139, 0.12); }
+
+    .side-stack {
+      display: grid;
+      gap: 18px;
+    }
+
+    .account-card,
+    .list-card,
+    .review-card {
+      padding: 18px;
+    }
+
+    .account-card strong,
+    .list-card strong,
+    .review-card strong {
+      display: block;
+      font-size: 16px;
+      margin-bottom: 6px;
+    }
+
+    .review-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .empty {
+      padding: 26px 20px;
+      border-radius: var(--radius-lg);
+      border: 1px dashed rgba(0, 113, 227, 0.18);
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.55);
+      text-align: center;
+      font-size: 14px;
+    }
+
+    .login-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(15, 23, 42, 0.18);
+      backdrop-filter: blur(8px);
+      z-index: 50;
+    }
+
+    .login-overlay.open { display: flex; }
+
+    .history-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(15, 23, 42, 0.24);
+      backdrop-filter: blur(10px);
+      z-index: 70;
+    }
+
+    .history-overlay.open { display: flex; }
+
+    .template-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(15, 23, 42, 0.24);
+      backdrop-filter: blur(10px);
+      z-index: 75;
+    }
+
+    .template-overlay.open { display: flex; }
+
+    .template-card {
+      width: min(860px, 100%);
+      max-height: 82vh;
+      overflow: hidden;
+      border-radius: 28px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: var(--shadow-xl);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .template-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 22px 24px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .template-head h3 {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: -0.03em;
+    }
+
+    .template-head p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .template-body {
+      padding: 18px 24px 24px;
+      overflow: auto;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .template-option {
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: #fff;
+      box-shadow: var(--shadow-md);
+      text-align: left;
+      padding: 14px 14px 12px;
+      cursor: pointer;
+      transition: transform .18s ease, border-color .18s ease;
+    }
+
+    .template-option:hover {
+      transform: translateY(-2px);
+      border-color: rgba(0, 113, 227, 0.26);
+    }
+
+    .template-option strong {
+      display: block;
+      font-size: 16px;
+      margin-bottom: 6px;
+    }
+
+    .template-option p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .history-card {
+      width: min(780px, 100%);
+      max-height: 82vh;
+      overflow: hidden;
+      border-radius: 28px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: var(--shadow-xl);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .history-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 22px 24px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .history-head h3 {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: -0.03em;
+    }
+
+    .history-head p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .history-body {
+      padding: 18px 24px 24px;
+      overflow: auto;
+      display: grid;
+      gap: 10px;
+    }
+
+    .history-item {
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: #fff;
+      box-shadow: var(--shadow-md);
+      padding: 14px 16px;
+    }
+
+    .history-item strong {
+      display: block;
+      font-size: 15px;
+      margin-bottom: 4px;
+    }
+
+    .history-item p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .login-card {
+      width: min(460px, 100%);
+      border-radius: 30px;
+      padding: 28px;
+    }
+
+    .login-card h2 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      letter-spacing: -0.04em;
+    }
+
+    .login-card p {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .field {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .login-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .login-actions .btn,
+    .login-actions .ghost {
+      flex: 1 1 0;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 20px;
+      transform: translateX(-50%) translateY(16px);
+      min-width: 220px;
+      max-width: 90vw;
+      padding: 14px 18px;
+      border-radius: 16px;
+      color: #fff;
+      background: rgba(20, 20, 23, 0.92);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .18s ease, transform .18s ease;
+      z-index: 90;
+      text-align: center;
+      font-size: 13px;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    @media (max-width: 1220px) {
+      .dashboard { grid-template-columns: 1fr; }
+      .topbar { flex-wrap: wrap; }
+      .top-center-slot {
+        order: 3;
+        width: 100%;
+        justify-content: flex-start;
+        margin-left: 0;
+        margin-top: 6px;
+      }
+      .special-entry {
+        width: auto;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .shell { padding: 14px; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .doc-card { flex-direction: column; }
+      .doc-actions > * { flex: 1 1 0; }
+      .template-body { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">FD</div>
+        <div class="brand-copy">
+          <h1>流程文件管理平台</h1>
+          <p>部门起草、提交审核、统一归档。</p>
+        </div>
+      </div>
+      <div class="top-center-slot">
+        <a class="special-entry" href="/special-board.html?v=20260417-26" target="_blank" rel="noreferrer">打开文件专项看板</a>
+      </div>
+      <div class="top-actions">
+        <button class="ghost" id="openLoginBtn">登录</button>
+        <button class="ghost" id="logoutBtn" hidden>退出</button>
+      </div>
+    </header>
+
+    <section class="dashboard">
+      <section class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <h2>文档工作台</h2>
+            <p id="heroText">16 个部门统一在系统内起草、提交和跟踪流程文件，管理员集中审核。</p>
+          </div>
+          <div class="workspace-actions">
+            <button class="btn" id="newDocBtn" hidden>新建文件</button>
+            <button class="ghost" id="refreshDocsBtn">刷新列表</button>
+          </div>
+        </div>
+
+        <div class="stats">
+          <div class="stat-card"><strong id="docCount">0</strong><span>可访问文档</span></div>
+          <div class="stat-card"><strong id="editCount">0</strong><span>可编辑文档</span></div>
+          <div class="stat-card"><strong id="pendingCount">0</strong><span>待审核</span></div>
+          <div class="stat-card"><strong id="approvedCount">0</strong><span>已批准</span></div>
+        </div>
+
+        <div class="toolbar">
+          <input class="input" id="searchInput" placeholder="搜索标题、文号、部门、提交人">
+          <select class="select" id="departmentFilter">
+            <option value="all">全部部门</option>
+          </select>
+          <select class="select" id="scopeFilter">
+            <option value="all">全部范围</option>
+            <option value="company">公司共享</option>
+            <option value="team">部门共享</option>
+            <option value="private">私有</option>
+          </select>
+          <select class="select" id="statusFilter">
+            <option value="all">全部状态</option>
+            <option value="draft">草稿</option>
+            <option value="submitted">待审核</option>
+            <option value="returned">已退回</option>
+            <option value="approved">已批准</option>
+          </select>
+          <select class="select" id="capabilityFilter">
+            <option value="all">全部权限</option>
+            <option value="edit">可编辑</option>
+            <option value="view">只读</option>
+          </select>
+        </div>
+
+        <div class="doc-list" id="docList">
+          <div class="empty">请先登录后查看文档列表。</div>
+        </div>
+      </section>
+
+      <aside class="side-stack">
+        <section class="panel">
+          <div class="panel-title" style="margin-bottom: 14px;">
+            <h3>当前账户</h3>
+          </div>
+          <div class="account-card" id="accountCard">
+            <strong>未登录</strong>
+            <p>请先登录后访问文档库和审核功能。</p>
+          </div>
+          <div id="sessionArea" style="margin-top: 14px;">
+            <div class="empty">登录后可查看个人工作区。</div>
+          </div>
+        </section>
+
+        <section class="panel" id="reviewPanel" hidden>
+          <div class="panel-title" style="margin-bottom: 14px;">
+            <h3>待审核队列</h3>
+            <p>管理员可在这里集中处理提交文件。</p>
+          </div>
+          <div class="review-list" id="reviewList"></div>
+        </section>
+
+        <section class="panel" id="adminUsersCard" hidden>
+          <div class="panel-title" style="margin-bottom: 14px;">
+            <h3>部门账号</h3>
+            <p>管理员可在网页端修改显示名、部门名称并重置密码（仅管理员可操作）。</p>
+          </div>
+          <div class="people-list" id="userList"></div>
+        </section>
+      </aside>
+    </section>
+  </div>
+
+  <div class="login-overlay" id="loginOverlay">
+    <div class="login-card">
+      <h2>登录</h2>
+      <p>进入部门文件起草与审核工作台。</p>
+      <div class="field">
+        <label for="usernameInput">用户名</label>
+        <input class="input" id="usernameInput" autocomplete="username" value="">
+      </div>
+      <div class="field">
+        <label for="passwordInput">密码</label>
+        <input class="input" id="passwordInput" type="password" autocomplete="current-password" value="">
+      </div>
+      <div class="login-actions">
+        <button class="ghost" id="closeLoginBtn">关闭</button>
+        <button class="btn" id="submitLoginBtn">进入系统</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="history-overlay" id="historyOverlay">
+    <div class="history-card">
+      <div class="history-head">
+        <div>
+          <h3>历史版本</h3>
+          <p id="historyDocMeta">查看服务器留存的保存、提交和审核记录。</p>
+        </div>
+        <button class="ghost" id="closeHistoryBtn" type="button">关闭</button>
+      </div>
+      <div class="history-body" id="historyList">
+        <div class="empty">请选择一份文档查看版本历史。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="template-overlay" id="templateOverlay">
+    <div class="template-card">
+      <div class="template-head">
+        <div>
+          <h3>选择模板</h3>
+          <p>新建文件前先选择模板类型，后续可在编辑器继续调整，默认可保存到服务器。</p>
+        </div>
+        <button class="ghost" id="closeTemplateBtn" type="button">关闭</button>
+      </div>
+      <div class="template-body">
+        <button class="template-option" data-template="standard-sipoc" type="button">
+          <strong>模板1：流程型文件模板</strong>
+          <p>流程型模板，包含封面、修订履历、文件会签、目录、流程图与 SIPOC 模块。</p>
+        </button>
+        <button class="template-option" data-template="core-fixed" type="button">
+          <strong>模板2：制度类文件模板</strong>
+          <p>封面、修订履历、文件会签、目录固定，制度正文支持按光标插入与调整。</p>
+        </button>
+        <button class="template-option" data-template="fully-flexible" type="button">
+          <strong>模板3：全可调整</strong>
+          <p>除封面、修订履历、文件会签、目录外，其余模块均可自由删除和插入。</p>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/app.js?v=20260417-7"></script>
+</body>
+</html>
+
+

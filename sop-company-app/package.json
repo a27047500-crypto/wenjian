@@ -1,0 +1,18 @@
+{
+  "name": "sop-company-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Flow Docs company app",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:lan": "node server.js",
+    "check": "node --check server.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "qms-p-005",
+  "title": "采购控制程序",
+  "docNo": "QMS-P-005",
+  "version": 6,
+  "saveVersion": 1,
+  "updatedAt": "2026-04-12T14:27:36.159Z",
+  "updatedBy": "admin",
+  "owner": "admin",
+  "department": "管理中心",
+  "access": {
+    "level": "company",
+    "editors": [],
+    "viewers": []
+  },
+  "workflow": {
+    "status": "returned",
+    "submittedAt": "2026-04-12T14:24:03.754Z",
+    "submittedBy": "admin",
+    "reviewedAt": "2026-04-12T14:27:36.159Z",
+    "reviewedBy": "admin",
+    "reviewNote": "请根据制度要求补充或修改后重新提交",
+    "lastActionAt": "2026-04-12T14:27:36.159Z",
+    "lastActionBy": "admin"
+  },
+  "source": "editor"
+}

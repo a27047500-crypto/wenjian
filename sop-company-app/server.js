@@ -1822,6 +1822,62 @@ async function handleApi(req, url, res) {
     }
   }
 
+  if (req.method === "POST" && apiPath === "/api/ai/chat") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    const key = process.env.DEEPSEEK_API_KEY || "";
+    if (!key) {
+      sendJson(res, 503, { error: "DeepSeek API Key 未配置，请联系管理员设置环境变量 DEEPSEEK_API_KEY" });
+      return true;
+    }
+    const bodyState = await readJsonBody(req, res);
+    if (!bodyState.ok) return true;
+    const { messages, model } = bodyState.data;
+    if (!Array.isArray(messages) || messages.length === 0) {
+      sendJson(res, 400, { error: "消息不能为空" });
+      return true;
+    }
+    const safeModel = ["deepseek-chat", "deepseek-reasoner"].includes(model) ? model : "deepseek-chat";
+    const https = require("https");
+    const payload = JSON.stringify({ model: safeModel, messages, stream: true, max_tokens: 4096 });
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    await new Promise((resolve) => {
+      const options = {
+        hostname: "api.deepseek.com",
+        path: "/chat/completions",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+          "Content-Length": Buffer.byteLength(payload),
+        },
+        timeout: 120000,
+      };
+      const reqAi = https.request(options, (resAi) => {
+        resAi.on("data", (chunk) => { try { res.write(chunk); } catch (_) {} });
+        resAi.on("end", () => { try { res.end(); } catch (_) {} resolve(); });
+        resAi.on("error", () => { try { res.end(); } catch (_) {} resolve(); });
+      });
+      reqAi.on("error", (err) => {
+        try { res.write(`data: {"error":"${err.message.replace(/"/g, '\\"')}"}\n\n`); res.end(); } catch (_) {}
+        resolve();
+      });
+      reqAi.on("timeout", () => {
+        reqAi.destroy();
+        try { res.write(`data: {"error":"请求超时"}\n\n`); res.end(); } catch (_) {}
+        resolve();
+      });
+      reqAi.write(payload);
+      reqAi.end();
+    });
+    return true;
+  }
+
   if (req.method === "GET" && apiPath === "/api/ai/config") {
     const user = requireAuth(req, res);
     if (!user) return true;

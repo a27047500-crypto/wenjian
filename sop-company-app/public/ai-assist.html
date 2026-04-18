@@ -3,364 +3,552 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI 助手窗口</title>
+  <title>AI 助手</title>
   <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #f5f7fb;
-      --card: #ffffff;
-      --line: #d9e1ea;
-      --text: #0f172a;
-      --muted: #64748b;
-      --primary: #2563eb;
-      --primary-weak: #eff6ff;
+      --bg: #f0f2f5;
+      --sidebar: #ffffff;
+      --chat-bg: #f7f8fa;
+      --user-bubble: #1c64f2;
+      --ai-bubble: #ffffff;
+      --border: #e5e7eb;
+      --text: #111827;
+      --muted: #6b7280;
+      --primary: #1c64f2;
+      --primary-hover: #1a56db;
+      --doc-bg: #eff6ff;
+      --doc-border: #bfdbfe;
+      --warn-bg: #fffbeb;
+      --warn-border: #fde68a;
+      --warn-text: #92400e;
+      --radius: 12px;
     }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: "Segoe UI", "PingFang SC", sans-serif;
-      color: var(--text);
-      background: linear-gradient(180deg, #f8fbff, var(--bg));
-      min-height: 100vh;
-    }
-    .page { max-width: 1100px; margin: 0 auto; padding: 16px; }
-    .head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 10px;
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 12px 14px;
-      margin-bottom: 12px;
-    }
-    .head h1 { margin: 0; font-size: 20px; }
-    .head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
-    .card {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 12px;
-      margin-bottom: 12px;
-    }
-    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .grow { flex: 1 1 200px; }
-    .label { color: var(--muted); font-size: 12px; margin-bottom: 4px; display: block; }
-    .input, .select, .textarea {
-      width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 8px 10px;
-      background: #fff;
-      color: var(--text);
-      font: inherit;
-    }
-    .textarea { min-height: 120px; resize: vertical; }
-    .textarea.result { min-height: 300px; background: #f8fafc; }
-    .btn {
-      border: 1px solid var(--line);
-      background: #fff;
-      border-radius: 10px;
-      padding: 8px 12px;
-      cursor: pointer;
-      color: var(--text);
-      font-weight: 600;
-    }
-    .btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
-    .btn.weak { background: var(--primary-weak); color: #1d4ed8; border-color: #bfdbfe; }
-    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-    .meta {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 8px;
-      margin-top: 8px;
-    }
-    .meta-item {
-      border: 1px dashed var(--line);
-      border-radius: 10px;
-      padding: 8px;
-      font-size: 12px;
-      color: var(--muted);
-      background: #fcfdff;
-      min-height: 58px;
-    }
-    .meta-item strong { display: block; color: #334155; margin-bottom: 2px; }
-    .status { font-size: 12px; color: var(--muted); }
-    .warn {
-      padding: 8px 10px;
-      border-radius: 10px;
-      border: 1px solid #fde68a;
-      background: #fffbeb;
-      color: #92400e;
-      font-size: 12px;
-    }
-    @media (max-width: 860px) {
-      .meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
+    html, body { height: 100%; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); }
+
+    /* Layout */
+    #app { display: flex; flex-direction: column; height: 100vh; max-width: 860px; margin: 0 auto; background: var(--chat-bg); box-shadow: 0 0 24px rgba(0,0,0,0.08); }
+
+    /* Header */
+    #header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #1e3a5f; color: white; flex-shrink: 0; }
+    #header-title { font-size: 16px; font-weight: 700; flex: 1; }
+    #header-title span { font-size: 13px; font-weight: 400; opacity: 0.7; margin-left: 6px; }
+    .hbtn { border: 1px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.1); color: white; border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; transition: background 0.15s; }
+    .hbtn:hover { background: rgba(255,255,255,0.2); }
+    #modelSelect { background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.25); border-radius: 8px; padding: 5px 8px; font-size: 12px; cursor: pointer; }
+    #modelSelect option { background: #1e3a5f; color: white; }
+
+    /* Doc context banner */
+    #docBanner { display: none; padding: 8px 14px; background: var(--doc-bg); border-bottom: 1px solid var(--doc-border); font-size: 12px; color: #1e40af; flex-shrink: 0; }
+    #docBanner.show { display: flex; align-items: center; gap: 8px; }
+    #docBannerText { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #docBanner button { border: 1px solid var(--doc-border); background: white; color: #1e40af; border-radius: 6px; padding: 2px 8px; font-size: 11px; cursor: pointer; white-space: nowrap; }
+    #docBanner button:hover { background: #dbeafe; }
+
+    /* Config warning */
+    #configWarn { display: none; padding: 8px 14px; background: var(--warn-bg); border-bottom: 1px solid var(--warn-border); font-size: 12px; color: var(--warn-text); flex-shrink: 0; }
+    #configWarn.show { display: block; }
+
+    /* Messages */
+    #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+    .msg { display: flex; gap: 8px; max-width: 100%; }
+    .msg.user { flex-direction: row-reverse; }
+    .msg-avatar { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; }
+    .msg.user .msg-avatar { background: var(--user-bubble); color: white; }
+    .msg.ai .msg-avatar { background: #e0e7ff; color: #3730a3; }
+    .msg-body { max-width: 78%; display: flex; flex-direction: column; gap: 4px; }
+    .msg.user .msg-body { align-items: flex-end; }
+    .bubble { padding: 10px 14px; border-radius: var(--radius); line-height: 1.65; font-size: 14px; word-break: break-word; }
+    .msg.user .bubble { background: var(--user-bubble); color: white; border-bottom-right-radius: 4px; }
+    .msg.ai .bubble { background: var(--ai-bubble); color: var(--text); border: 1px solid var(--border); border-bottom-left-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .bubble.streaming::after { content: "▌"; animation: blink 0.7s steps(1) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .msg-actions { display: flex; gap: 6px; }
+    .msg-action-btn { border: 1px solid var(--border); background: white; color: var(--muted); border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
+    .msg-action-btn:hover { background: #f3f4f6; color: var(--text); }
+    .msg-action-btn.insert { color: var(--primary); border-color: var(--doc-border); background: var(--doc-bg); }
+    .msg-action-btn.insert:hover { background: #dbeafe; }
+
+    /* Markdown rendering in bubbles */
+    .bubble h1, .bubble h2, .bubble h3 { font-weight: 700; margin: 10px 0 4px; line-height: 1.3; }
+    .bubble h1 { font-size: 16px; } .bubble h2 { font-size: 15px; } .bubble h3 { font-size: 14px; }
+    .bubble p { margin: 4px 0; }
+    .bubble ul, .bubble ol { padding-left: 20px; margin: 4px 0; }
+    .bubble li { margin: 2px 0; }
+    .bubble code { background: #f3f4f6; color: #c0392b; padding: 1px 4px; border-radius: 4px; font-family: monospace; font-size: 13px; }
+    .msg.user .bubble code { background: rgba(255,255,255,0.2); color: #fef3c7; }
+    .bubble pre { background: #1e293b; color: #e2e8f0; border-radius: 8px; padding: 12px; overflow-x: auto; margin: 8px 0; }
+    .bubble pre code { background: none; color: inherit; padding: 0; font-size: 12px; }
+    .bubble strong { font-weight: 700; }
+    .bubble em { font-style: italic; }
+    .bubble hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+    .bubble blockquote { border-left: 3px solid #cbd5e1; padding-left: 10px; color: #64748b; margin: 4px 0; }
+    .bubble table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
+    .bubble th, .bubble td { border: 1px solid #e5e7eb; padding: 6px 10px; text-align: left; }
+    .bubble th { background: #f9fafb; font-weight: 600; }
+
+    /* System / thinking messages */
+    .msg.system { justify-content: center; }
+    .msg.system .bubble { background: none; border: none; box-shadow: none; color: var(--muted); font-size: 12px; padding: 0; }
+
+    /* Quick actions */
+    #quickActions { padding: 0 16px 10px; display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; }
+    .qa-btn { border: 1px solid var(--doc-border); background: var(--doc-bg); color: #1d4ed8; border-radius: 20px; padding: 5px 12px; font-size: 12px; cursor: pointer; transition: background 0.15s; white-space: nowrap; }
+    .qa-btn:hover { background: #dbeafe; }
+
+    /* Input area */
+    #inputArea { padding: 10px 14px 14px; border-top: 1px solid var(--border); background: white; flex-shrink: 0; }
+    #inputRow { display: flex; gap: 8px; align-items: flex-end; }
+    #userInput { flex: 1; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font: inherit; font-size: 14px; resize: none; outline: none; min-height: 44px; max-height: 140px; overflow-y: auto; line-height: 1.5; transition: border-color 0.15s; }
+    #userInput:focus { border-color: var(--primary); }
+    #sendBtn { width: 42px; height: 42px; background: var(--primary); color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background 0.15s; }
+    #sendBtn:hover:not(:disabled) { background: var(--primary-hover); }
+    #sendBtn:disabled { background: #9ca3af; cursor: not-allowed; }
+    #stopBtn { display: none; width: 42px; height: 42px; background: #ef4444; color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 700; flex-shrink: 0; transition: background 0.15s; }
+    #stopBtn:hover { background: #dc2626; }
+    #inputHint { font-size: 11px; color: var(--muted); margin-top: 5px; text-align: right; }
+
+    /* Thinking block */
+    .thinking-block { background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 12px; color: #64748b; }
+    .thinking-block summary { cursor: pointer; font-weight: 600; color: #475569; }
+
+    /* Scrollbar */
+    #messages::-webkit-scrollbar { width: 5px; }
+    #messages::-webkit-scrollbar-track { background: transparent; }
+    #messages::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
   </style>
 </head>
 <body>
-  <div class="page">
-    <section class="head">
-      <div>
-        <h1>🤖 AI 助手窗口</h1>
-        <p>独立于编辑器运行：不会自动改文档，只有你点"插入到编辑器"才回填。</p>
-      </div>
-      <div class="row">
-        <button class="btn" id="reloadSnapshotBtn" type="button">从编辑器抓取正文</button>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="row">
-        <div class="grow">
-          <label class="label" for="aiMode">任务类型</label>
-          <select id="aiMode" class="select">
-            <option value="review">AI审阅</option>
-            <option value="write">AI写作</option>
-          </select>
-        </div>
-        <div class="grow">
-          <label class="label" for="aiModel">模型</label>
-          <select id="aiModel" class="select"></select>
-        </div>
-        <div class="grow">
-          <label class="label">状态</label>
-          <div id="aiStatus" class="status">初始化中...</div>
-        </div>
-      </div>
-      <div id="configHint" class="warn" style="margin-top: 10px; display: none;"></div>
-      <div class="meta" id="docMeta"></div>
-    </section>
-
-    <section class="card">
-      <label class="label" for="aiInstruction">你的要求</label>
-      <textarea id="aiInstruction" class="textarea" placeholder="例如：请审阅当前流程并指出高风险缺陷；或补写职责分工章节。"></textarea>
-    </section>
-
-    <section class="card">
-      <label class="label" for="aiInput">文档快照（可手工补充）</label>
-      <textarea id="aiInput" class="textarea" placeholder="将自动从编辑器抓取，也可手工粘贴。"></textarea>
-      <div class="row" style="margin-top: 10px;">
-        <button id="runBtn" class="btn primary" type="button">开始生成</button>
-        <button id="copyBtn" class="btn" type="button">复制结果</button>
-        <button id="insertBtn" class="btn weak" type="button">插入到编辑器</button>
-      </div>
-    </section>
-
-    <section class="card">
-      <label class="label" for="aiResult">AI 输出</label>
-      <textarea id="aiResult" class="textarea result" readonly placeholder="结果会显示在这里。"></textarea>
-    </section>
+<div id="app">
+  <!-- Header -->
+  <div id="header">
+    <div id="header-title">🤖 AI 助手<span>由 DeepSeek 提供支持</span></div>
+    <select id="modelSelect">
+      <option value="deepseek-chat">deepseek-chat</option>
+      <option value="deepseek-reasoner">deepseek-reasoner</option>
+    </select>
+    <button class="hbtn" id="grabBtn">📄 抓取文档</button>
+    <button class="hbtn" id="clearBtn" title="清空对话">清空</button>
   </div>
 
-  <script>
-    const AI_ENDPOINT = '/api/ai/document-assist';
-    const AI_CONFIG_ENDPOINT = '/api/ai/config';
-    const SNAPSHOT_REQUEST_TYPE = 'sop-ai-request-snapshot';
-    const SNAPSHOT_RESPONSE_TYPE = 'sop-ai-snapshot';
-    const INSERT_REQUEST_TYPE = 'sop-ai-insert-text';
+  <!-- Document context banner -->
+  <div id="docBanner">
+    <span>📄</span>
+    <span id="docBannerText"></span>
+    <button id="releaseDocBtn">解除文档</button>
+  </div>
 
-    let aiConfig = null;
-    let docSnapshot = {
-      title: '',
-      docNo: '',
-      department: '',
-      templateKey: '',
-      text: '',
-    };
+  <!-- Config warning -->
+  <div id="configWarn" class="show"></div>
 
-    const $ = (id) => document.getElementById(id);
+  <!-- Messages -->
+  <div id="messages">
+    <div class="msg system"><div class="bubble">你好！我是 AI 助手。点击「抓取文档」可以让我分析你正在编辑的文件，或直接向我提问。</div></div>
+  </div>
 
-    function setStatus(text) {
-      $('aiStatus').textContent = text || '';
+  <!-- Quick action buttons -->
+  <div id="quickActions"></div>
+
+  <!-- Input area -->
+  <div id="inputArea">
+    <div id="inputRow">
+      <textarea id="userInput" rows="1" placeholder="输入消息，Shift+Enter 换行，Enter 发送..."></textarea>
+      <button id="sendBtn" title="发送">➤</button>
+      <button id="stopBtn" title="停止">■</button>
+    </div>
+    <div id="inputHint">模型：<span id="currentModel">deepseek-chat</span></div>
+  </div>
+</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let conversationHistory = [];  // { role, content }[]
+  let docContext = null;         // { title, docNo, department, templateKey, text }
+  let streamController = null;   // AbortController for current stream
+  let isStreaming = false;
+
+  const CHAT_ENDPOINT = '/api/ai/chat';
+  const CONFIG_ENDPOINT = '/api/ai/config';
+  const SNAPSHOT_REQ = 'sop-ai-request-snapshot';
+  const SNAPSHOT_RES = 'sop-ai-snapshot';
+  const INSERT_TYPE = 'sop-ai-insert-text';
+
+  // ── DOM refs ───────────────────────────────────────────────────────────────
+  const $messages = document.getElementById('messages');
+  const $input = document.getElementById('userInput');
+  const $sendBtn = document.getElementById('sendBtn');
+  const $stopBtn = document.getElementById('stopBtn');
+  const $docBanner = document.getElementById('docBanner');
+  const $docBannerText = document.getElementById('docBannerText');
+  const $configWarn = document.getElementById('configWarn');
+  const $modelSelect = document.getElementById('modelSelect');
+  const $currentModel = document.getElementById('currentModel');
+  const $quickActions = document.getElementById('quickActions');
+
+  $modelSelect.addEventListener('change', () => { $currentModel.textContent = $modelSelect.value; });
+
+  // ── Markdown renderer (simple) ─────────────────────────────────────────────
+  function renderMarkdown(text) {
+    let html = text
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      // Code blocks
+      .replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
+        `<pre><code>${code.trim()}</code></pre>`)
+      // Inline code
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      // Bold
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      // Italic
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      // Headings
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+      // Blockquote
+      .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>')
+      // Horizontal rule
+      .replace(/^---+$/gm, '<hr>')
+      // Tables (basic)
+      .replace(/^\|(.+)\|$/gm, (line) => {
+        const cells = line.split('|').slice(1, -1).map(c => c.trim());
+        return '<tr>' + cells.map(c => `<td>${c}</td>`).join('') + '</tr>';
+      })
+      // Unordered list
+      .replace(/^[*\-] (.+)$/gm, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
+      // Ordered list
+      .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
+      // Line breaks & paragraphs
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/\n/g, '<br>');
+    // Wrap in p if no block elements
+    if (!html.match(/^<(h[1-3]|ul|ol|pre|blockquote|hr|table)/)) {
+      html = '<p>' + html + '</p>';
+    }
+    return html;
+  }
+
+  // ── Message rendering ──────────────────────────────────────────────────────
+  function addMessage(role, content, streaming = false) {
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+
+    if (role === 'system') {
+      div.innerHTML = `<div class="bubble">${content}</div>`;
+      $messages.appendChild(div);
+      scrollBottom();
+      return div;
     }
 
-    function updateMeta() {
-      const items = [
-        ['标题', docSnapshot.title || '-'],
-        ['文号', docSnapshot.docNo || '-'],
-        ['部门', docSnapshot.department || '-'],
-        ['模板', docSnapshot.templateKey || '-'],
-      ];
-      $('docMeta').innerHTML = items
-        .map(([label, value]) => `<div class="meta-item"><strong>${label}</strong>${String(value || '')}</div>`)
-        .join('');
+    const avatarText = role === 'user' ? '我' : 'AI';
+    const bodyDiv = document.createElement('div');
+    bodyDiv.className = 'msg-body';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble' + (streaming ? ' streaming' : '');
+    if (role === 'ai') {
+      bubble.innerHTML = renderMarkdown(content || '');
+    } else {
+      bubble.textContent = content;
     }
 
-    function fillModelOptions(config) {
-      const select = $('aiModel');
-      const models = Array.isArray(config?.allowedModels) ? config.allowedModels : [];
-      select.innerHTML = models.map((m) => `<option value="${m}">${m}</option>`).join('');
-      if (models.length === 0) {
-        select.innerHTML = '<option value="">无可用模型</option>';
+    bodyDiv.appendChild(bubble);
+
+    if (role === 'ai' && !streaming) {
+      const actions = document.createElement('div');
+      actions.className = 'msg-actions';
+      actions.innerHTML = `
+        <button class="msg-action-btn" onclick="copyText(this)">复制</button>
+        <button class="msg-action-btn insert" onclick="insertToEditor(this)">插入到编辑器</button>`;
+      bubble._rawText = content;
+      bodyDiv.appendChild(actions);
+    }
+
+    div.innerHTML = `<div class="msg-avatar">${avatarText}</div>`;
+    div.appendChild(bodyDiv);
+    $messages.appendChild(div);
+    scrollBottom();
+    return div;
+  }
+
+  function updateStreamBubble(msgDiv, content, done = false) {
+    const bubble = msgDiv.querySelector('.bubble');
+    if (!bubble) return;
+    bubble.innerHTML = renderMarkdown(content || '');
+    if (done) {
+      bubble.classList.remove('streaming');
+      bubble._rawText = content;
+      const bodyDiv = msgDiv.querySelector('.msg-body');
+      const actions = document.createElement('div');
+      actions.className = 'msg-actions';
+      actions.innerHTML = `
+        <button class="msg-action-btn" onclick="copyText(this)">复制</button>
+        <button class="msg-action-btn insert" onclick="insertToEditor(this)">插入到编辑器</button>`;
+      bodyDiv.appendChild(actions);
+    }
+    scrollBottom();
+  }
+
+  function scrollBottom() {
+    $messages.scrollTop = $messages.scrollHeight;
+  }
+
+  // ── Copy & Insert ──────────────────────────────────────────────────────────
+  function copyText(btn) {
+    const bubble = btn.closest('.msg-body').querySelector('.bubble');
+    const text = bubble._rawText || bubble.innerText || '';
+    navigator.clipboard.writeText(text).catch(() => {});
+    btn.textContent = '已复制';
+    setTimeout(() => { btn.textContent = '复制'; }, 1500);
+  }
+
+  function insertToEditor(btn) {
+    const bubble = btn.closest('.msg-body').querySelector('.bubble');
+    const text = bubble._rawText || bubble.innerText || '';
+    if (!text) return;
+    if (!window.opener || window.opener.closed) {
+      addMessage('system', '未检测到编辑器窗口，请从编辑器打开此窗口');
+      return;
+    }
+    window.opener.postMessage({ type: INSERT_TYPE, payload: { text } }, '*');
+    btn.textContent = '已发送';
+    setTimeout(() => { btn.textContent = '插入到编辑器'; }, 1500);
+  }
+
+  // ── Document context ───────────────────────────────────────────────────────
+  function setDocContext(snapshot) {
+    docContext = snapshot;
+    const label = [snapshot.title, snapshot.department].filter(Boolean).join(' · ') || '文档';
+    $docBannerText.textContent = `📄 已加载：${label}`;
+    $docBanner.classList.add('show');
+    updateQuickActions();
+    addMessage('system', `✅ 已抓取文档「${label}」，可以开始分析或提问`);
+  }
+
+  function releaseDoc() {
+    docContext = null;
+    $docBanner.classList.remove('show');
+    updateQuickActions();
+    addMessage('system', '已解除文档关联');
+  }
+
+  function buildSystemPrompt() {
+    if (!docContext || !docContext.text) {
+      return '你是专业的企业文件助手，擅长SOP流程分析和写作，请用中文回应。';
+    }
+    const info = [
+      docContext.title && `标题：${docContext.title}`,
+      docContext.docNo && `文号：${docContext.docNo}`,
+      docContext.department && `部门：${docContext.department}`,
+      docContext.templateKey && `模板：${docContext.templateKey}`,
+    ].filter(Boolean).join('\n');
+    return `你是专业的SOP文件助手，用中文回应。\n\n用户正在编辑的文件：\n${info}\n\n文件正文：\n${docContext.text.slice(0, 6000)}`;
+  }
+
+  // ── Quick actions ──────────────────────────────────────────────────────────
+  function updateQuickActions() {
+    if (docContext) {
+      $quickActions.innerHTML = `
+        <button class="qa-btn" onclick="quickSend('请审阅此文件，指出主要问题和改进建议')">📋 审阅文件</button>
+        <button class="qa-btn" onclick="quickSend('请总结此文件的核心要点')">📌 总结要点</button>
+        <button class="qa-btn" onclick="quickSend('请指出此文件中的高风险缺陷或逻辑漏洞')">⚠️ 风险分析</button>
+        <button class="qa-btn" onclick="quickSend('请帮我优化此文件的表达，使其更规范专业')">✍️ 优化表达</button>`;
+    } else {
+      $quickActions.innerHTML = `
+        <button class="qa-btn" onclick="document.getElementById('grabBtn').click()">📄 先抓取文档</button>
+        <button class="qa-btn" onclick="quickSend('帮我写一份SOP流程文件大纲')">📝 写SOP大纲</button>`;
+    }
+  }
+
+  function quickSend(text) {
+    $input.value = text;
+    sendMessage();
+  }
+
+  // ── Grab document ──────────────────────────────────────────────────────────
+  function grabDoc() {
+    if (!window.opener || window.opener.closed) {
+      addMessage('system', '未检测到编辑器窗口，请从编辑器工具栏点击「AI 助手」打开此窗口');
+      return;
+    }
+    window.opener.postMessage({ type: SNAPSHOT_REQ }, '*');
+    addMessage('system', '正在从编辑器抓取文档...');
+  }
+
+  window.addEventListener('message', (event) => {
+    if (!event.data || typeof event.data !== 'object') return;
+    if (event.data.type === SNAPSHOT_RES) {
+      const snap = event.data.payload || {};
+      if (snap.text && snap.text.length > 10) {
+        setDocContext(snap);
+      } else {
+        addMessage('system', '文档内容为空，请先在编辑器中打开文件');
       }
-      const preferred = String(config?.defaultModel || '');
-      if (preferred && models.includes(preferred)) {
-        select.value = preferred;
-      }
     }
+  });
 
-    function applySnapshot(snapshot = {}) {
-      docSnapshot = {
-        title: String(snapshot.title || ''),
-        docNo: String(snapshot.docNo || ''),
-        department: String(snapshot.department || ''),
-        templateKey: String(snapshot.templateKey || ''),
-        text: String(snapshot.text || ''),
-      };
-      if (docSnapshot.text) {
-        $('aiInput').value = docSnapshot.text;
-      }
-      updateMeta();
-      setStatus('已更新文档快照');
-    }
+  // ── Send message ───────────────────────────────────────────────────────────
+  async function sendMessage() {
+    const text = $input.value.trim();
+    if (!text || isStreaming) return;
+    $input.value = '';
+    autoResizeInput();
 
-    function requestSnapshotFromOpener() {
-      if (!window.opener || window.opener.closed) {
-        setStatus('未检测到编辑器窗口，可手工粘贴正文');
+    addMessage('user', text);
+
+    const messages = [
+      { role: 'system', content: buildSystemPrompt() },
+      ...conversationHistory,
+      { role: 'user', content: text },
+    ];
+    conversationHistory.push({ role: 'user', content: text });
+
+    setStreaming(true);
+    const aiMsgDiv = addMessage('ai', '', true);
+    let fullContent = '';
+    let thinkingContent = '';
+    let inThinking = false;
+
+    try {
+      streamController = new AbortController();
+      const response = await fetch(CHAT_ENDPOINT, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages, model: $modelSelect.value }),
+        signal: streamController.signal,
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        updateStreamBubble(aiMsgDiv, `❌ ${err.error || '请求失败'}`, true);
+        setStreaming(false);
         return;
       }
-      try {
-        window.opener.postMessage({ type: SNAPSHOT_REQUEST_TYPE }, '*');
-        setStatus('已请求编辑器正文快照...');
-      } catch (_) {
-        setStatus('请求编辑器快照失败，请手工粘贴正文');
-      }
-    }
 
-    async function loadAiConfig() {
-      try {
-        const response = await fetch(AI_CONFIG_ENDPOINT, { credentials: 'include' });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          setStatus(data.error || '读取 AI 配置失败');
-          return;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') continue;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.error) { fullContent += `\n\n❌ ${parsed.error}`; break; }
+            const delta = parsed.choices?.[0]?.delta;
+            if (delta?.reasoning_content) {
+              thinkingContent += delta.reasoning_content;
+            }
+            if (delta?.content) {
+              fullContent += delta.content;
+            }
+            // Show thinking prefix if available
+            const display = thinkingContent
+              ? `<details class="thinking-block"><summary>思考过程</summary>${renderMarkdown(thinkingContent)}</details>${renderMarkdown(fullContent)}`
+              : renderMarkdown(fullContent);
+            const bubble = aiMsgDiv.querySelector('.bubble');
+            if (bubble) bubble.innerHTML = display;
+            scrollBottom();
+          } catch (_) {}
         }
-        aiConfig = data.config || null;
-        fillModelOptions(aiConfig);
-        const hint = $('configHint');
-        if (!aiConfig?.enabled) {
-          hint.style.display = '';
-          hint.textContent = 'AI 功能已被管理员关闭。';
-        } else if (!aiConfig?.configured) {
-          hint.style.display = '';
-          hint.textContent = 'AI 已开启，但服务端尚未配置有效 DeepSeek Key。请在服务器设置环境变量 DEEPSEEK_API_KEY。';
-        } else {
-          hint.style.display = 'none';
-        }
-
-        const limits = aiConfig?.limits || {};
-        const remainUser = limits.remainingByUser === null ? '不限' : String(limits.remainingByUser);
-        const remainDept = limits.remainingByDept === null ? '不限' : String(limits.remainingByDept);
-        setStatus(`配置已加载 · 个人剩余 ${remainUser} 次 · 部门剩余 ${remainDept} 次`);
-      } catch (_) {
-        setStatus('读取 AI 配置失败');
       }
+
+      // Finalize
+      const bubble = aiMsgDiv.querySelector('.bubble');
+      if (bubble) {
+        bubble._rawText = fullContent;
+        bubble.classList.remove('streaming');
+        const bodyDiv = aiMsgDiv.querySelector('.msg-body');
+        const actions = document.createElement('div');
+        actions.className = 'msg-actions';
+        actions.innerHTML = `
+          <button class="msg-action-btn" onclick="copyText(this)">复制</button>
+          <button class="msg-action-btn insert" onclick="insertToEditor(this)">插入到编辑器</button>`;
+        bodyDiv.appendChild(actions);
+      }
+      conversationHistory.push({ role: 'assistant', content: fullContent });
+
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        updateStreamBubble(aiMsgDiv, `❌ ${err.message || '连接失败'}`, true);
+      } else {
+        const bubble = aiMsgDiv.querySelector('.bubble');
+        if (bubble) { bubble.classList.remove('streaming'); bubble._rawText = fullContent; }
+        conversationHistory.push({ role: 'assistant', content: fullContent });
+      }
+    } finally {
+      setStreaming(false);
     }
+  }
 
-    async function runAi() {
-      const action = String($('aiMode').value || 'review');
-      const model = String($('aiModel').value || '').trim();
-      const instruction = String($('aiInstruction').value || '').trim();
-      const text = String($('aiInput').value || '').trim();
-      if (!text || text.length < 20) {
-        setStatus('正文太短，请先抓取/粘贴正文');
-        return;
-      }
-      if (!model) {
-        setStatus('当前没有可用模型');
-        return;
-      }
+  function stopStream() {
+    if (streamController) { streamController.abort(); streamController = null; }
+  }
 
-      $('runBtn').disabled = true;
-      setStatus('AI 生成中，请稍候...');
+  function setStreaming(v) {
+    isStreaming = v;
+    $sendBtn.style.display = v ? 'none' : 'flex';
+    $stopBtn.style.display = v ? 'flex' : 'none';
+    $input.disabled = v;
+  }
 
-      try {
-        const payload = {
-          action,
-          model,
-          instruction,
-          text,
-          title: docSnapshot.title,
-          docNo: docSnapshot.docNo,
-          department: docSnapshot.department,
-          templateKey: docSnapshot.templateKey,
-        };
-        const response = await fetch(AI_ENDPOINT, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          setStatus(`失败：${data.error || 'AI 调用失败'}`);
-          return;
-        }
-        $('aiResult').value = String(data.content || '').trim();
-        setStatus(`完成 · 模型 ${data.model || model}`);
-      } catch (_) {
-        setStatus('失败：AI 调用异常');
-      } finally {
-        $('runBtn').disabled = false;
+  // ── Input auto-resize ──────────────────────────────────────────────────────
+  function autoResizeInput() {
+    $input.style.height = 'auto';
+    $input.style.height = Math.min($input.scrollHeight, 140) + 'px';
+  }
+
+  $input.addEventListener('input', autoResizeInput);
+  $input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+
+  // ── Button events ──────────────────────────────────────────────────────────
+  $sendBtn.addEventListener('click', sendMessage);
+  $stopBtn.addEventListener('click', stopStream);
+  document.getElementById('grabBtn').addEventListener('click', grabDoc);
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    conversationHistory = [];
+    $messages.innerHTML = '<div class="msg system"><div class="bubble">对话已清空。</div></div>';
+    addMessage('system', '你好！我是 AI 助手。点击「抓取文档」可以让我分析你正在编辑的文件，或直接向我提问。');
+  });
+  document.getElementById('releaseDocBtn').addEventListener('click', releaseDoc);
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  async function init() {
+    updateQuickActions();
+    try {
+      const resp = await fetch(CONFIG_ENDPOINT, { credentials: 'include' });
+      const data = await resp.json().catch(() => ({}));
+      const cfg = data.config || {};
+      if (!cfg.enabled) {
+        $configWarn.textContent = 'AI 功能已关闭，请联系管理员开启。';
+        $configWarn.classList.add('show');
+      } else if (!cfg.configured) {
+        $configWarn.textContent = '⚠️ 服务端未配置 DEEPSEEK_API_KEY，请联系管理员在服务器设置环境变量。';
+        $configWarn.classList.add('show');
+      } else {
+        $configWarn.classList.remove('show');
       }
+      if (cfg.defaultModel) $modelSelect.value = cfg.defaultModel;
+      $currentModel.textContent = $modelSelect.value;
+    } catch (_) {}
+
+    // Auto-grab if opened from editor
+    if (window.opener && !window.opener.closed) {
+      setTimeout(grabDoc, 300);
     }
+  }
 
-    async function copyResult() {
-      const text = String($('aiResult').value || '').trim();
-      if (!text) {
-        setStatus('没有可复制内容');
-        return;
-      }
-      try {
-        await navigator.clipboard.writeText(text);
-        setStatus('已复制 AI 结果');
-      } catch (_) {
-        $('aiResult').focus();
-        $('aiResult').select();
-        setStatus('已选中结果，请手工 Ctrl+C');
-      }
-    }
-
-    function insertToEditor() {
-      const text = String($('aiResult').value || '').trim();
-      if (!text) {
-        setStatus('请先生成 AI 结果');
-        return;
-      }
-      if (!window.opener || window.opener.closed) {
-        setStatus('未检测到编辑器窗口，无法插入');
-        return;
-      }
-      try {
-        window.opener.postMessage({
-          type: INSERT_REQUEST_TYPE,
-          payload: { text },
-        }, '*');
-        setStatus('已发送到编辑器，请在编辑器里确认插入位置');
-      } catch (_) {
-        setStatus('发送到编辑器失败');
-      }
-    }
-
-    window.addEventListener('message', (event) => {
-      const data = event.data || {};
-      if (!data || typeof data !== 'object') return;
-      if (data.type !== SNAPSHOT_RESPONSE_TYPE) return;
-      applySnapshot(data.payload || {});
-    });
-
-    $('reloadSnapshotBtn').addEventListener('click', requestSnapshotFromOpener);
-    $('runBtn').addEventListener('click', runAi);
-    $('copyBtn').addEventListener('click', copyResult);
-    $('insertBtn').addEventListener('click', insertToEditor);
-
-    (async function init() {
-      await loadAiConfig();
-      updateMeta();
-      requestSnapshotFromOpener();
-    })();
-  </script>
+  init();
+</script>
 </body>
 </html>

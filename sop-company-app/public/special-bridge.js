@@ -784,8 +784,39 @@
 
     const originalSave = app.save.bind(app);
 
+    async function gzipBytes(text) {
+      const bytes = new TextEncoder().encode(text);
+      const cs = new CompressionStream('gzip');
+      const writer = cs.writable.getWriter();
+      writer.write(bytes);
+      writer.close();
+      const chunks = [];
+      const reader = cs.readable.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const out = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) { out.set(c, off); off += c.length; }
+      return out;
+    }
+
     async function buildSnapshotRequest(data, baseRevision) {
       const rawText = JSON.stringify({ data, baseRevision });
+      if (rawText.length > 32768 && typeof CompressionStream === 'function') {
+        try {
+          const compressed = await gzipBytes(rawText);
+          return {
+            body: compressed,
+            headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' },
+          };
+        } catch (_) {
+          // fall through to uncompressed
+        }
+      }
       return {
         body: rawText,
         headers: { 'Content-Type': 'application/json' },
@@ -841,7 +872,19 @@
 
         if (saveResult && saveResult.status === 409) {
           if (localDirty) backupUnsynced(app);
-          const latestResult = await fetchJson(REMOTE_ENDPOINT, { method: 'GET' }, 12000);
+          // 先用轻量 meta 接口刷新版本号（避免 50MB 全量下载超时导致 lastKnownRevision 没更新）
+          try {
+            const metaOnConflict = await fetchJson(REMOTE_META_ENDPOINT, { method: 'GET' }, 8000);
+            if (metaOnConflict.ok) {
+              const rev = Number(metaOnConflict.data?.revision);
+              if (Number.isFinite(rev) && rev > lastKnownRevision) {
+                lastKnownRevision = rev;
+                lastSyncAt = String(metaOnConflict.data?.updatedAt || '');
+              }
+            }
+          } catch (_) {}
+          // 再全量拉取最新数据刷新界面（使用完整超时，允许大文件）
+          const latestResult = await fetchJson(REMOTE_ENDPOINT, { method: 'GET' }, REMOTE_FULL_FETCH_TIMEOUT_MS);
           if (latestResult.ok && latestResult.data) {
             applyRemoteSnapshot(app, latestResult.data, '检测到他人更新，已自动刷新为最新版本');
             await persistLocal(app, originalSave);
@@ -888,6 +931,18 @@
         }
         return true;
       } catch (err) {
+        // 保存请求超时或网络错误时，服务端可能已处理并推进了 revision；
+        // 用轻量 meta 接口刷新 lastKnownRevision，避免下次保存因版本不匹配持续 409
+        try {
+          const metaOnError = await fetchJson(REMOTE_META_ENDPOINT, { method: 'GET' }, 5000);
+          if (metaOnError.ok) {
+            const rev = Number(metaOnError.data?.revision);
+            if (Number.isFinite(rev) && rev > lastKnownRevision) {
+              lastKnownRevision = rev;
+              lastSyncAt = String(metaOnError.data?.updatedAt || '');
+            }
+          }
+        } catch (_) {}
         setSyncStatus('同步失败');
         setLastSaveError((err && err.message) || '专项看板同步失败，请检查网络或登录状态');
         if (!options.silentErrorToast) {

@@ -2527,11 +2527,9 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                                 
                                 if (s.status === '已定稿' || s.status === '已发布') {
                                     docsFinal++;
-                                    if (s.status === '已定稿') {
-                                        if(dStat) dStat.final++;
-                                        if (s.dateDoc) {
-                                            calEvents.push({ type: 'doc', dateStr: s.dateDoc, title: `✅ [定稿] ${s.l2}`, badge: '定稿', dept: m.dept, moduleId: m.id, processId: s.id });
-                                        }
+                                    if(dStat) dStat.final++;
+                                    if (s.status === '已定稿' && s.dateDoc) {
+                                        calEvents.push({ type: 'doc', dateStr: s.dateDoc, title: `✅ [定稿] ${s.l2}`, badge: '定稿', dept: m.dept, moduleId: m.id, processId: s.id });
                                     }
                                 }
 
@@ -3342,7 +3340,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
 
 
 
-<script src="/special-bridge.js?v=20260418-53"></script>
+<script src="/special-bridge.js?v=20260418-54"></script>
 </body>
 </html>
 

@@ -5,7 +5,7 @@
   const REMOTE_DEPT_ENDPOINT = '/api/special-board/dept';
   const REMOTE_STREAM_ENDPOINT = '/api/special-board/stream';
   const SESSION_ENDPOINT = '/api/session';
-  const SPECIAL_BOARD_VERSION = '20260418-51';
+  const SPECIAL_BOARD_VERSION = '20260418-52';
   const SPECIAL_BOARD_CACHE_CLEANUP_KEY = 'special_board_cache_cleanup_v1';
   const POLL_INTERVAL_MS = 600;
   const AUTO_SAVE_DEBOUNCE_MS = 600;
@@ -387,7 +387,7 @@
       app.renderPlanView();
       return;
     }
-    if (app.currentViewType === 'overview' && typeof app.showOverview === 'function') {
+    if (app.currentViewType === 'overview' && isCurrentUserAdmin() && typeof app.showOverview === 'function') {
       app.showOverview();
       return;
     }
@@ -395,7 +395,7 @@
       app.selectDept(app.currentDept);
       return;
     }
-    if (typeof app.showOverview === 'function') app.showOverview();
+    if (isCurrentUserAdmin() && typeof app.showOverview === 'function') app.showOverview();
   }
 
   function renderSyncMeta() {

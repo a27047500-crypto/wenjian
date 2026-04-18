@@ -908,7 +908,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         </div>
         <div class="nav-scroll">
             <div class="btn-group" style="margin-top:0; padding-top:0; border:none;">
-                <div class="overview-btn active" id="btnOverview" onclick="app.showOverview()">📊 总览报告</div>
+                <div class="overview-btn active admin-only-nav" id="btnOverview" onclick="app.showOverview()">📊 总览报告</div>
                 <div class="overview-btn admin-only-nav" onclick="app.openPdfFolder(null)" style="margin-top:5px; background:#1e293b; border-color:#334155;">📁 全局 PDF 文件库</div>
                 <div class="overview-btn admin-only-nav" id="btnPlan" onclick="app.showPlanView()" style="margin-top:5px; background:#1e293b; border-color:#334155;">📅 月度执行计划</div>
                 <div class="overview-btn admin-only-nav" id="btnOrgChart" onclick="app.showOrgChartView()" style="margin-top:5px; background:#1e293b; border-color:#334155;">🏛️ 组织架构全景</div>
@@ -3305,7 +3305,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
 
 
 
-<script src="/special-bridge.js?v=20260418-51"></script>
+<script src="/special-bridge.js?v=20260418-52"></script>
 </body>
 </html>
 

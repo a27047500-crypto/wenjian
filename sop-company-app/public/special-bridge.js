@@ -5,7 +5,7 @@
   const REMOTE_DEPT_ENDPOINT = '/api/special-board/dept';
   const REMOTE_STREAM_ENDPOINT = '/api/special-board/stream';
   const SESSION_ENDPOINT = '/api/session';
-  const SPECIAL_BOARD_VERSION = '20260418-50';
+  const SPECIAL_BOARD_VERSION = '20260418-51';
   const SPECIAL_BOARD_CACHE_CLEANUP_KEY = 'special_board_cache_cleanup_v1';
   const POLL_INTERVAL_MS = 600;
   const AUTO_SAVE_DEBOUNCE_MS = 600;
@@ -563,43 +563,9 @@
     }, 1500);
   }
 
-  function ensureSaveDock(app) {
-    if (document.getElementById('specialSyncDock')) return;
-    const dock = document.createElement('div');
-    dock.id = 'specialSyncDock';
-    dock.className = 'special-sync-dock';
-    dock.innerHTML = `
-      <button id="specialSyncBtn" class="special-sync-btn" type="button">保存到服务器</button>
-      <span id="specialSyncMeta" class="special-sync-meta">未同步</span>
-    `;
-    document.body.appendChild(dock);
-    renderSyncMeta();
-
-    const btn = document.getElementById('specialSyncBtn');
-    saveBtnEl = btn;
-    btn.disabled = true;
-    btn.textContent = '初始化中...';
-    btn.addEventListener('click', async () => {
-      if (!initialSyncDone) return;
-      if (btn.dataset.loading === '1') return;
-      btn.dataset.loading = '1';
-      btn.disabled = true;
-      const originalText = btn.textContent;
-      btn.textContent = '保存中...';
-      setSyncStatus('同步中...');
-      try {
-        const saved = await app.save({ manual: true, timeoutMs: 28000 });
-        if (!saved) {
-          toast(window.__specialSyncLastError || '保存到服务器失败', 'error');
-        }
-      } catch (err) {
-        toast((err && err.message) || '保存失败，请稍后重试', 'error');
-      } finally {
-        btn.dataset.loading = '0';
-        btn.disabled = false;
-        btn.textContent = originalText;
-      }
-    });
+  function ensureSaveDock() {
+    // Dock removed: auto-save (600ms) + SSE push handle sync silently.
+    // Errors surface via toast notifications.
   }
 
   async function syncFromServerLatest(
@@ -1186,6 +1152,10 @@
       updateBaseline(app);
     } finally {
       markInitialSyncDone();
+      // Silently migrate any legacy base64 PDFs to server file storage
+      if (typeof app.migrateBase64Pdfs === 'function') {
+        setTimeout(() => app.migrateBase64Pdfs().catch(() => {}), 2000);
+      }
     }
 
     window.addEventListener('beforeunload', () => {

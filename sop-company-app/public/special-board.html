@@ -608,7 +608,6 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         /* 非管理员隐藏管理操作 */
         body.non-admin .add-dept-btn { display: none !important; }
         body.non-admin .action-dept { display: none !important; }
-        body.non-admin #headerAddBtn { display: none !important; }
         body.non-admin .admin-only-nav { display: none !important; }
         body.non-admin .special-sync-dock { display: none !important; }
 
@@ -2116,7 +2115,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 const node = isModule ? m : (Array.isArray(m.subs) ? m.subs.find(s => String(s.id) === String(pId)) : null);
                 
                 const content = document.getElementById('pdfManagerContent');
-                if (node && node.pdf && node.pdf.data) {
+                if (node && node.pdf && (node.pdf.fileId || node.pdf.data)) {
                     content.innerHTML = `
                         <div style="padding:15px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:15px;">
                             <div style="font-weight:bold; color:var(--text-main); margin-bottom:5px;">📄 ${escapeHTML(node.pdf.name)}</div>
@@ -2139,39 +2138,42 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             } catch(e) { console.error(e); }
         },
 
-        handlePdfUpload(input) {
+        async handlePdfUpload(input) {
             const file = input.files[0];
             if (!file) return;
             if (file.type !== 'application/pdf') {
                 showToast("请务必上传 .pdf 格式的文件！", "error");
                 input.value = ''; return;
             }
-            
-            const reader = new FileReader();
-            reader.onload = async (e) => {
-                try {
-                    const base64Data = e.target.result;
-                    const { moduleId, pId } = this.currentPdfTarget;
-                    const isModule = !pId || pId === 'null';
-                    const m = this.data.arch.find(a => String(a.id) === String(moduleId));
-                    const node = isModule ? m : (Array.isArray(m.subs) ? m.subs.find(s => String(s.id) === String(pId)) : null);
-                    if(!node) return;
+            try {
+                showToast("PDF 上传中...");
+                const res = await fetch('/api/attachments/upload', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) },
+                    body: file,
+                });
+                const result = await res.json();
+                if (!result.ok) throw new Error(result.error || '服务器拒绝上传');
 
-                    node.pdf = { name: file.name, data: base64Data, date: formatLocalDate(new Date()) };
-                    
-                    if (!isModule && node.status !== '已发布') node.status = '已发布';
-                    
-                    await this.save(); 
-                    showToast("PDF 附件上传成功！");
-                    this.openPdfManager(moduleId, pId); 
-                    this.reRenderCurrentView();
-                } catch (err) { 
-                    showToast("上传失败: 文件过大或解析错误", "error"); 
-                } finally {
-                    input.value = '';
-                }
-            };
-            reader.readAsDataURL(file); 
+                const { moduleId, pId } = this.currentPdfTarget;
+                const isModule = !pId || pId === 'null';
+                const m = this.data.arch.find(a => String(a.id) === String(moduleId));
+                const node = isModule ? m : (Array.isArray(m.subs) ? m.subs.find(s => String(s.id) === String(pId)) : null);
+                if (!node) return;
+
+                node.pdf = { name: result.name, fileId: result.fileId, date: formatLocalDate(new Date()) };
+                if (!isModule && node.status !== '已发布') node.status = '已发布';
+
+                await this.save();
+                showToast("PDF 附件上传成功！");
+                this.openPdfManager(moduleId, pId);
+                this.reRenderCurrentView();
+            } catch (err) {
+                showToast("上传失败: " + (err.message || '请检查网络'), "error");
+            } finally {
+                input.value = '';
+            }
         },
 
         downloadPdf() {
@@ -2180,8 +2182,10 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 const isModule = !pId || pId === 'null';
                 const m = this.data.arch.find(a => String(a.id) === String(moduleId));
                 const node = isModule ? m : (Array.isArray(m.subs) ? m.subs.find(s => String(s.id) === String(pId)) : null);
-                
-                if (node && node.pdf && node.pdf.data) {
+                if (!node || !node.pdf) return;
+                if (node.pdf.fileId) {
+                    window.open('/api/attachments/' + node.pdf.fileId, '_blank');
+                } else if (node.pdf.data) {
                     downloadBlobFile(node.pdf.data, node.pdf.name);
                 }
             } catch(e) { console.error(e); showToast("下载失败", "error"); }
@@ -2194,15 +2198,50 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                     const isModule = !pId || pId === 'null';
                     const m = this.data.arch.find(a => String(a.id) === String(moduleId));
                     const node = isModule ? m : (Array.isArray(m.subs) ? m.subs.find(s => String(s.id) === String(pId)) : null);
-                    
+
                     if(node) delete node.pdf;
-                    
-                    await this.save(); 
+
+                    await this.save();
                     showToast("PDF 附件已删除，存储空间已释放");
                     this.openPdfManager(moduleId, pId);
                     this.reRenderCurrentView();
                 } catch(e){ showToast("删除失败", "error"); }
             });
+        },
+
+        async migrateBase64Pdfs() {
+            if (!Array.isArray(this.data.arch)) return 0;
+            let migrated = 0;
+            const allNodes = [];
+            for (const m of this.data.arch) {
+                allNodes.push(m);
+                if (Array.isArray(m.subs)) m.subs.forEach(s => allNodes.push(s));
+            }
+            for (const node of allNodes) {
+                if (node.pdf && node.pdf.data && !node.pdf.fileId) {
+                    try {
+                        const b64 = node.pdf.data.includes(',') ? node.pdf.data.split(',')[1] : node.pdf.data;
+                        const byteStr = atob(b64);
+                        const bytes = new Uint8Array(byteStr.length);
+                        for (let i = 0; i < byteStr.length; i++) bytes[i] = byteStr.charCodeAt(i);
+                        const res = await fetch('/api/attachments/upload', {
+                            method: 'POST', credentials: 'include',
+                            headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(node.pdf.name || 'document.pdf') },
+                            body: new Blob([bytes], { type: 'application/pdf' }),
+                        });
+                        const result = await res.json();
+                        if (result.ok) {
+                            node.pdf = { name: node.pdf.name, fileId: result.fileId, date: node.pdf.date };
+                            migrated++;
+                        }
+                    } catch (_) {}
+                }
+            }
+            if (migrated > 0) {
+                try { await this.save(); } catch(_) {}
+                console.log('[PDF Migration] Migrated ' + migrated + ' PDFs to server storage');
+            }
+            return migrated;
         },
 
         openPdfFolder(deptName) {
@@ -2211,10 +2250,10 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 if(Array.isArray(this.data.arch)) {
                     this.data.arch.forEach(m => {
                         if (!deptName || m.dept === deptName) {
-                            if (m.pdf && m.pdf.data) files.push({ dept: m.dept, module: m.l1, process: '-', level: m.level || 'L1', name: m.pdf.name, data: m.pdf.data, date: m.pdf.date, type: 'Module' });
+                            if (m.pdf && (m.pdf.fileId || m.pdf.data)) files.push({ dept: m.dept, module: m.l1, process: '-', level: m.level || 'L1', name: m.pdf.name, fileId: m.pdf.fileId || null, data: m.pdf.data || null, date: m.pdf.date, type: 'Module' });
                             if (Array.isArray(m.subs)) {
                                 m.subs.forEach(s => {
-                                    if (s.pdf && s.pdf.data) files.push({ dept: m.dept, module: m.l1, process: s.l2, level: s.level || 'L3', name: s.pdf.name, data: s.pdf.data, date: s.pdf.date, type: 'Process' });
+                                    if (s.pdf && (s.pdf.fileId || s.pdf.data)) files.push({ dept: m.dept, module: m.l1, process: s.l2, level: s.level || 'L3', name: s.pdf.name, fileId: s.pdf.fileId || null, data: s.pdf.data || null, date: s.pdf.date, type: 'Process' });
                                 });
                             }
                         }
@@ -2239,7 +2278,10 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                             </td>
                             <td style="padding:12px; font-size:11px;">${escapeHTML(f.date)}</td>
                             <td style="padding:12px; text-align:center;">
-                                <a href="javascript:void(0)" onclick="downloadBlobFile(app._pdfFolderFiles[${i}].data, app._pdfFolderFiles[${i}].name)" style="display:inline-block; padding:4px 10px; background:var(--primary-light); color:var(--primary); border-radius:4px; font-size:11px; text-decoration:none; font-weight:bold; cursor:pointer;">⬇️ 下载</a>
+                                ${f.fileId
+                                    ? `<a href="/api/attachments/${f.fileId}" target="_blank" style="display:inline-block; padding:4px 10px; background:var(--primary-light); color:var(--primary); border-radius:4px; font-size:11px; text-decoration:none; font-weight:bold;">⬇️ 下载</a>`
+                                    : `<a href="javascript:void(0)" onclick="downloadBlobFile(app._pdfFolderFiles[${i}].data, app._pdfFolderFiles[${i}].name)" style="display:inline-block; padding:4px 10px; background:var(--primary-light); color:var(--primary); border-radius:4px; font-size:11px; text-decoration:none; font-weight:bold; cursor:pointer;">⬇️ 下载</a>`
+                                }
                             </td>
                         </tr>
                     `).join('');
@@ -2318,7 +2360,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                     gridHtml += `<div style="grid-column:1/-1; text-align:center; padding:60px; color:#94a3b8; border:2px dashed #e2e8f0; border-radius:12px;"><div>暂无业务模块，请点击右上角新增</div></div>`;
                 } else {
                     deptData.forEach(m => {
-                        const mHasPdf = m.pdf && m.pdf.data;
+                        const mHasPdf = m.pdf && (m.pdf.fileId || m.pdf.data);
                         
                         gridHtml += `
                             <div class="module-card" id="module-${m.id}">
@@ -2340,7 +2382,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                                         const statusClass = s.status === '已发布' ? 'c-published' : (s.status === '已定稿' ? 'c-done' : (s.status === '梳理中' ? 'c-draft' : 'c-todo'));
                                         const dotColor = s.status === '已发布' ? '#10b981' : (s.status === '已定稿' ? '#3b82f6' : (s.status === '梳理中' ? '#f59e0b' : '#cbd5e1'));
                                         const hasSipoc = s.sipoc && Array.isArray(s.sipoc.steps) && s.sipoc.steps.some(step => step.p && String(step.p).trim() !== '');
-                                        const hasDoc = s.pdf && s.pdf.data;
+                                        const hasDoc = s.pdf && (s.pdf.fileId || s.pdf.data);
                                         const pendingCount = Array.isArray(s.todos) ? s.todos.filter(t => !t.done).length : 0;
 
                                         return `
@@ -2567,7 +2609,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 else if (this.currentOverviewTab === 'published') {
                     chartTitle = `已正式发布文件`;
                     detailListHtml = groupDataByDept(
-                        (m, s) => s !== null && s.status === '已发布' && s.pdf && s.pdf.data, 
+                        (m, s) => s !== null && s.status === '已发布' && s.pdf && (s.pdf.fileId || s.pdf.data), 
                         (m, s) => `<div class="dl-item" onclick="app.openPdfManager('${m.id}', '${s.id}')"><span>🚀 ${escapeHTML(s.l2)}</span><span class="dl-badge" style="background:#dcfce7; color:#16a34a;">在线查阅</span></div>`
                     );
                 }
@@ -3263,7 +3305,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
 
 
 
-<script src="/special-bridge.js?v=20260417-26"></script>
+<script src="/special-bridge.js?v=20260418-51"></script>
 </body>
 </html>
 

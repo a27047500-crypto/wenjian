@@ -19,6 +19,7 @@ const USERS_FILE = path.join(DATA_ROOT, "users.json");
 const SPECIAL_BOARD_FILE = path.join(DATA_ROOT, "special-board.json");
 const SPECIAL_BOARD_META_FILE = path.join(DATA_ROOT, "special-board-meta.json");
 const SPECIAL_BOARD_DEPTS_DIR = path.join(DATA_ROOT, "special-board-depts");
+const ATTACHMENTS_DIR = path.join(DATA_ROOT, "attachments");
 const SPECIAL_BOARD_STORAGE = String(process.env.SPECIAL_BOARD_STORAGE || "file").toLowerCase();
 const PG_SSL = String(process.env.PG_SSL || "").toLowerCase() === "true";
 
@@ -74,6 +75,7 @@ fs.mkdirSync(DOCUMENTS_DIR, { recursive: true });
 fs.mkdirSync(HISTORY_DIR, { recursive: true });
 fs.mkdirSync(METADATA_DIR, { recursive: true });
 fs.mkdirSync(SPECIAL_BOARD_DEPTS_DIR, { recursive: true });
+fs.mkdirSync(ATTACHMENTS_DIR, { recursive: true });
 
 const sessions = new Map();
 const loginAttempts = new Map();
@@ -2018,6 +2020,51 @@ async function handleApi(req, url, res) {
       updatedAt: saved.current.updatedAt,
       updatedBy: saved.current.updatedBy,
     });
+    return true;
+  }
+
+  if (req.method === "POST" && apiPath === "/api/attachments/upload") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    const fileName = safeDecodeURIComponent(String(req.headers["x-file-name"] || "file.pdf")).replace(/[/\\]/g, "_").slice(0, 200) || "file.pdf";
+    try {
+      const rawBuffer = await readBody(req);
+      if (!rawBuffer || rawBuffer.length < 4) {
+        sendJson(res, 400, { error: "Empty file" });
+        return true;
+      }
+      const fileId = crypto.randomBytes(16).toString("hex");
+      const filePath = path.join(ATTACHMENTS_DIR, fileId + ".pdf");
+      fs.writeFileSync(filePath, rawBuffer);
+      sendJson(res, 200, { ok: true, fileId, name: fileName, size: rawBuffer.length });
+    } catch (err) {
+      if (err?.code === "BODY_TOO_LARGE") {
+        sendJson(res, 413, { error: "File too large" });
+      } else {
+        sendJson(res, 500, { error: err.message || "Upload failed" });
+      }
+    }
+    return true;
+  }
+
+  const attachmentMatch = url.pathname.match(/^\/api\/attachments\/([0-9a-f]{32})$/);
+  if (req.method === "GET" && attachmentMatch) {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    const fileId = attachmentMatch[1];
+    const filePath = path.join(ATTACHMENTS_DIR, fileId + ".pdf");
+    if (!filePath.startsWith(path.resolve(ATTACHMENTS_DIR)) || !fs.existsSync(filePath)) {
+      sendText(res, 404, "Not Found");
+      return true;
+    }
+    const stat = fs.statSync(filePath);
+    res.writeHead(200, {
+      "Content-Type": "application/pdf",
+      "Content-Length": stat.size,
+      "Content-Disposition": "inline",
+      "Cache-Control": "private, max-age=31536000",
+    });
+    fs.createReadStream(filePath).pipe(res);
     return true;
   }
 

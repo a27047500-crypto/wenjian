@@ -609,6 +609,8 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         body.non-admin .add-dept-btn { display: none !important; }
         body.non-admin .action-dept { display: none !important; }
         body.non-admin #headerAddBtn { display: none !important; }
+        body.non-admin .admin-only-nav { display: none !important; }
+        body.non-admin .special-sync-dock { display: none !important; }
 
         .btn-group { display: flex; flex-direction: column; gap: 5px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #1e293b; }
         .overview-btn { padding: 12px; background: #334155; border: 1px solid #475569; color: #e2e8f0; border-radius: 6px; cursor: pointer; font-size: 13px; transition: 0.2s; font-weight: 600; display: flex; align-items: center; gap: 10px; }
@@ -908,9 +910,9 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         <div class="nav-scroll">
             <div class="btn-group" style="margin-top:0; padding-top:0; border:none;">
                 <div class="overview-btn active" id="btnOverview" onclick="app.showOverview()">📊 总览报告</div>
-                <div class="overview-btn" onclick="app.openPdfFolder(null)" style="margin-top:5px; background:#1e293b; border-color:#334155;">📁 全局 PDF 文件库</div>
-                <div class="overview-btn" id="btnPlan" onclick="app.showPlanView()" style="margin-top:5px; background:#1e293b; border-color:#334155;">📅 月度执行计划</div>
-                <div class="overview-btn" id="btnOrgChart" onclick="app.showOrgChartView()" style="margin-top:5px; background:#1e293b; border-color:#334155;">🏛️ 组织架构全景</div>
+                <div class="overview-btn admin-only-nav" onclick="app.openPdfFolder(null)" style="margin-top:5px; background:#1e293b; border-color:#334155;">📁 全局 PDF 文件库</div>
+                <div class="overview-btn admin-only-nav" id="btnPlan" onclick="app.showPlanView()" style="margin-top:5px; background:#1e293b; border-color:#334155;">📅 月度执行计划</div>
+                <div class="overview-btn admin-only-nav" id="btnOrgChart" onclick="app.showOrgChartView()" style="margin-top:5px; background:#1e293b; border-color:#334155;">🏛️ 组织架构全景</div>
             </div>
             <div class="nav-label">组织架构</div>
             <div id="deptNav"><div class="nav-item ">
@@ -941,7 +943,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             <div class="add-dept-btn" onclick="app.openModal('addDept')">+ 新增部门</div>
         </div>
         
-        <div class="data-tools">
+        <div class="data-tools admin-only-nav">
             <button class="tool-btn" onclick="app.exportData()" title="将最新数据导出为 JSON 文件分享给同事">📥 导出备份</button>
             <button class="tool-btn" onclick="document.getElementById('fileInput').click()" title="智能合并同事发来的 JSON 数据">📤 导入合并</button>
             <input type="file" id="fileInput" accept=".json" style="display:none" onchange="app.importData(this)">

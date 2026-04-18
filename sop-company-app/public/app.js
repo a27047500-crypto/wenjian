@@ -2,6 +2,10 @@
 let currentSession = null;
 let documentsCache = [];
 let usersCache = [];
+let onlineSessionsCache = null;
+let onlineSessionsTimer = null;
+let aiAdminConfigCache = null;
+let aiAuditCache = [];
 
 const CACHE_CLEANUP_KEY = "sop_client_cache_cleanup_v3";
 const $ = (id) => document.getElementById(id);
@@ -28,6 +32,11 @@ function roleLabel(role) {
   if (role === "admin") return "管理员";
   if (role === "viewer") return "只读用户";
   return "编辑用户";
+}
+
+function specialBoardAccessLabel(access, role) {
+  if (role === "admin") return "文件专项：全量可见（管理员）";
+  return access === "all" ? "文件专项：全量可见" : "文件专项：仅本部门";
 }
 
 function scopeLabel(level) {
@@ -217,12 +226,16 @@ function renderAccountCard() {
   const sessionArea = $("sessionArea");
   const reviewPanel = $("reviewPanel");
   const adminUsersCard = $("adminUsersCard");
+  const adminOnlineCard = $("adminOnlineCard");
+  const adminAiCard = $("adminAiCard");
 
   if (!currentSession) {
     accountCard.innerHTML = "<strong>未登录</strong><p>请先登录后访问文档库和审核功能。</p>";
     sessionArea.innerHTML = '<div class="empty">登录后可查看个人工作区。</div>';
     reviewPanel.hidden = true;
     adminUsersCard.hidden = true;
+    if (adminOnlineCard) adminOnlineCard.hidden = true;
+    if (adminAiCard) adminAiCard.hidden = true;
     return;
   }
 
@@ -248,6 +261,8 @@ function renderAccountCard() {
 
   reviewPanel.hidden = currentSession.role !== "admin";
   adminUsersCard.hidden = currentSession.role !== "admin";
+  if (adminOnlineCard) adminOnlineCard.hidden = currentSession.role !== "admin";
+  if (adminAiCard) adminAiCard.hidden = currentSession.role !== "admin";
 }
 
 function updateStats() {
@@ -476,21 +491,296 @@ function renderUsers() {
   userList.innerHTML = "";
 
   usersCache.forEach((user) => {
+    const currentAccess = String(user.specialBoardAccess || "own").toLowerCase() === "all" ? "all" : "own";
+    const canToggleAccess = user.role !== "admin";
+    const toggleBtnHtml = canToggleAccess
+      ? `<button data-user-toggle-special-board="${escapeHtml(user.username)}">${
+          currentAccess === "all" ? "改为仅本部门" : "开放全量可见"
+        }</button>`
+      : "";
     const row = document.createElement("div");
     row.className = "list-card";
     row.innerHTML = `
       <strong>${escapeHtml(user.displayName)}</strong>
       <p>${escapeHtml(user.username)} · ${escapeHtml(user.department || "未分配部门")}</p>
       <p>${escapeHtml(roleLabel(user.role))}</p>
+      <p>${escapeHtml(specialBoardAccessLabel(currentAccess, user.role))}</p>
       <div class="doc-actions" style="margin-top:10px;">
         <button data-user-rename="${escapeHtml(user.username)}">改显示名/部门</button>
         <button data-user-reset-password="${escapeHtml(user.username)}">重置密码</button>
+        ${toggleBtnHtml}
       </div>
     `;
     userList.appendChild(row);
   });
 
   bindUserManageButtons(userList);
+}
+
+function formatDateTime(value) {
+  const text = String(value || "").trim();
+  if (!text) return "-";
+  const time = Date.parse(text);
+  if (!Number.isFinite(time)) return "-";
+  return new Date(time).toLocaleString("zh-CN");
+}
+
+function formatSecondsAgo(seconds) {
+  const value = Number(seconds || 0);
+  if (!Number.isFinite(value) || value <= 1) return "刚刚";
+  if (value < 60) return `${Math.round(value)} 秒前`;
+  if (value < 3600) return `${Math.round(value / 60)} 分钟前`;
+  return `${Math.round(value / 3600)} 小时前`;
+}
+
+function stopOnlineSessionsPolling() {
+  if (onlineSessionsTimer) {
+    clearInterval(onlineSessionsTimer);
+    onlineSessionsTimer = null;
+  }
+}
+
+function renderOnlineSessions() {
+  const adminOnlineCard = $("adminOnlineCard");
+  const summary = $("onlineSummary");
+  const accountList = $("onlineAccountList");
+  if (!adminOnlineCard || !summary || !accountList) return;
+
+  if (!currentSession || currentSession.role !== "admin") {
+    adminOnlineCard.hidden = true;
+    summary.innerHTML = "";
+    accountList.innerHTML = "";
+    return;
+  }
+
+  adminOnlineCard.hidden = false;
+
+  if (!onlineSessionsCache) {
+    summary.innerHTML = "";
+    accountList.innerHTML = '<div class="empty">正在读取在线账号数据...</div>';
+    return;
+  }
+
+  const stats = onlineSessionsCache.summary || {};
+  summary.innerHTML = `
+    <div class="presence-stat"><strong>${Number(stats.onlineAccounts || 0)}</strong><span>在线账号</span></div>
+    <div class="presence-stat"><strong>${Number(stats.onlineSessions || 0)}</strong><span>在线会话</span></div>
+    <div class="presence-stat"><strong>${Number(stats.activeSessions || 0)}</strong><span>活跃会话</span></div>
+    <div class="presence-stat"><strong>${Number(stats.multiLoginAccounts || 0)}</strong><span>多端同登账号</span></div>
+  `;
+
+  const rows = Array.isArray(onlineSessionsCache.byUser) ? onlineSessionsCache.byUser : [];
+  if (!rows.length) {
+    accountList.innerHTML = '<div class="empty">当前没有在线账号。</div>';
+    return;
+  }
+
+  accountList.innerHTML = rows
+    .slice(0, 30)
+    .map((row) => {
+      const danger = Number(row.onlineSessions || 0) > 1 ? "（多端同登）" : "";
+      return `
+        <article class="presence-item">
+          <strong>${escapeHtml(row.displayName || row.username)} · ${escapeHtml(row.username)} ${escapeHtml(danger)}</strong>
+          <p>${escapeHtml(row.department || "未分配部门")} · ${escapeHtml(roleLabel(row.role))} · 在线会话 ${Number(row.onlineSessions || 0)} · 活跃 ${Number(row.activeSessions || 0)}</p>
+          <p>最近心跳：${escapeHtml(formatDateTime(row.latestSeenAt))}（${escapeHtml(formatSecondsAgo((Date.now() - Date.parse(row.latestSeenAt || 0)) / 1000))}）</p>
+          <p>IP 数量：${Number(row.ipCount || 0)} · ${escapeHtml((row.ips || []).join(", ") || "-")}</p>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+async function fetchOnlineSessionsIfNeeded(options = {}) {
+  if (!currentSession || currentSession.role !== "admin") {
+    onlineSessionsCache = null;
+    renderOnlineSessions();
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/admin/online-sessions", { credentials: "include" });
+    const data = await response.json();
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        onlineSessionsCache = null;
+        renderOnlineSessions();
+      }
+      if (!options.silent) showToast(data.error || "读取在线账号失败");
+      return;
+    }
+    onlineSessionsCache = data;
+    renderOnlineSessions();
+  } catch (_) {
+    if (!options.silent) showToast("读取在线账号失败");
+  }
+}
+
+function refreshOnlineSessionsPolling() {
+  stopOnlineSessionsPolling();
+  if (!currentSession || currentSession.role !== "admin") {
+    onlineSessionsCache = null;
+    renderOnlineSessions();
+    return;
+  }
+
+  renderOnlineSessions();
+  fetchOnlineSessionsIfNeeded({ silent: true });
+  onlineSessionsTimer = setInterval(() => {
+    fetchOnlineSessionsIfNeeded({ silent: true });
+  }, 10000);
+}
+
+function parseModelList(raw) {
+  return Array.from(
+    new Set(
+      String(raw || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function renderAdminAiPanel() {
+  const card = $("adminAiCard");
+  const auditList = $("aiAuditList");
+  const meta = $("aiConfigMeta");
+  if (!card || !auditList || !meta) return;
+
+  if (!currentSession || currentSession.role !== "admin") {
+    card.hidden = true;
+    auditList.innerHTML = "";
+    meta.textContent = "";
+    return;
+  }
+
+  card.hidden = false;
+
+  if (!aiAdminConfigCache) {
+    auditList.innerHTML = '<div class="empty">正在读取 AI 配置...</div>';
+    meta.textContent = "";
+    return;
+  }
+
+  const cfg = aiAdminConfigCache;
+  const enabledSelect = $("aiEnabledSelect");
+  const defaultModel = $("aiDefaultModelInput");
+  const allowedModels = $("aiAllowedModelsInput");
+  const limitUser = $("aiLimitUserInput");
+  const limitDept = $("aiLimitDeptInput");
+  if (enabledSelect) enabledSelect.value = String(!!cfg.enabled);
+  if (defaultModel) defaultModel.value = String(cfg.defaultModel || "");
+  if (allowedModels) allowedModels.value = Array.isArray(cfg.allowedModels) ? cfg.allowedModels.join(",") : "";
+  if (limitUser) limitUser.value = String(cfg.limits?.dailyPerUser ?? 0);
+  if (limitDept) limitDept.value = String(cfg.limits?.dailyPerDept ?? 0);
+
+  meta.textContent = `配置状态：${cfg.enabled ? "开启" : "关闭"} · 服务端${
+    cfg.configured ? "已配置" : "未配置"
+  } · 更新人 ${cfg.updatedBy || "-"} · 更新时间 ${formatDateTime(cfg.updatedAt)}`;
+
+  if (!aiAuditCache.length) {
+    auditList.innerHTML = '<div class="empty">暂无调用日志。</div>';
+    return;
+  }
+
+  auditList.innerHTML = aiAuditCache
+    .slice(0, 120)
+    .map((item) => {
+      const tag = item.status === "ok" ? "成功" : "失败";
+      const tokenText = Number(item.totalTokens || 0) > 0 ? ` · tokens ${Number(item.totalTokens || 0)}` : "";
+      const err = item.error ? ` · ${escapeHtml(item.error)}` : "";
+      return `
+        <article class="audit-item">
+          <strong>${escapeHtml(item.displayName || item.username || "-")} · ${escapeHtml(
+            item.department || "-"
+          )} · ${escapeHtml(item.model || "-")} · ${escapeHtml(tag)}</strong>
+          <p>${escapeHtml(formatDateTime(item.ts))} · ${escapeHtml(item.action || "-")} · ${Number(
+        item.durationMs || 0
+      )}ms${tokenText}</p>
+          <p>IP ${escapeHtml(item.ip || "-")}${err}</p>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+async function fetchAdminAiConfig(options = {}) {
+  if (!currentSession || currentSession.role !== "admin") {
+    aiAdminConfigCache = null;
+    renderAdminAiPanel();
+    return;
+  }
+  try {
+    const response = await fetch("/api/admin/ai/config", { credentials: "include" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (!options.silent) showToast(data.error || "读取 AI 配置失败");
+      return;
+    }
+    aiAdminConfigCache = data.config || null;
+    renderAdminAiPanel();
+  } catch (_) {
+    if (!options.silent) showToast("读取 AI 配置失败");
+  }
+}
+
+async function fetchAdminAiAudit(options = {}) {
+  if (!currentSession || currentSession.role !== "admin") {
+    aiAuditCache = [];
+    renderAdminAiPanel();
+    return;
+  }
+  try {
+    const response = await fetch("/api/admin/ai/audit?limit=120", { credentials: "include" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (!options.silent) showToast(data.error || "读取 AI 日志失败");
+      return;
+    }
+    aiAuditCache = Array.isArray(data.items) ? data.items : [];
+    renderAdminAiPanel();
+  } catch (_) {
+    if (!options.silent) showToast("读取 AI 日志失败");
+  }
+}
+
+async function saveAdminAiConfig() {
+  if (!currentSession || currentSession.role !== "admin") return;
+
+  const enabled = $("aiEnabledSelect")?.value === "true";
+  const allowedModels = parseModelList($("aiAllowedModelsInput")?.value || "");
+  const defaultModel = String($("aiDefaultModelInput")?.value || "").trim();
+  const dailyLimitPerUser = Number($("aiLimitUserInput")?.value || 0);
+  const dailyLimitPerDept = Number($("aiLimitDeptInput")?.value || 0);
+
+  if (!allowedModels.length) {
+    showToast("至少保留一个可用模型");
+    return;
+  }
+
+  const payload = {
+    enabled,
+    allowedModels,
+    defaultModel: defaultModel || allowedModels[0],
+    dailyLimitPerUser: Number.isFinite(dailyLimitPerUser) ? Math.max(0, Math.trunc(dailyLimitPerUser)) : 0,
+    dailyLimitPerDept: Number.isFinite(dailyLimitPerDept) ? Math.max(0, Math.trunc(dailyLimitPerDept)) : 0,
+  };
+
+  const response = await fetch("/api/admin/ai/config", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    showToast(data.error || "保存 AI 配置失败");
+    return;
+  }
+  aiAdminConfigCache = data.config || null;
+  renderAdminAiPanel();
+  showToast("AI 配置已保存");
 }
 
 async function updateUserByAdmin(username, payload) {
@@ -570,6 +860,32 @@ function bindUserManageButtons(scope) {
       showToast(`已重置 ${username} 的密码`);
     });
   });
+
+  scope.querySelectorAll("[data-user-toggle-special-board]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const username = button.getAttribute("data-user-toggle-special-board");
+      const user = usersCache.find((item) => item.username === username);
+      if (!user) return;
+      if (user.role === "admin") {
+        showToast("管理员默认全量可见，无需修改");
+        return;
+      }
+      const currentAccess = String(user.specialBoardAccess || "own").toLowerCase() === "all" ? "all" : "own";
+      const nextAccess = currentAccess === "all" ? "own" : "all";
+      const confirmText =
+        nextAccess === "all"
+          ? `确认给 ${username} 开启“文件专项全量可见”权限吗？`
+          : `确认把 ${username} 改为“仅本部门可见”吗？`;
+      if (!window.confirm(confirmText)) return;
+
+      const ok = await updateUserByAdmin(username, { specialBoardAccess: nextAccess });
+      if (!ok) return;
+      showToast(nextAccess === "all" ? `${username} 已开通全量可见` : `${username} 已改为仅本部门可见`);
+      await fetchUsersIfNeeded();
+      await fetchSession();
+      await fetchDocuments();
+    });
+  });
 }
 
 function renderDocuments() {
@@ -581,6 +897,8 @@ function renderDocuments() {
     updateStats();
     renderReviewQueue();
     renderUsers();
+    renderOnlineSessions();
+    renderAdminAiPanel();
     docList.innerHTML = '<div class="empty">请先登录后查看文档列表。</div>';
     return;
   }
@@ -588,6 +906,8 @@ function renderDocuments() {
   updateStats();
   renderReviewQueue();
   renderUsers();
+  renderOnlineSessions();
+  renderAdminAiPanel();
 
   const items = getFilteredDocuments();
   if (!items.length) {
@@ -641,6 +961,15 @@ async function fetchSession() {
   setLoggedInState();
   renderHero();
   renderAccountCard();
+  refreshOnlineSessionsPolling();
+  if (currentSession && currentSession.role === "admin") {
+    fetchAdminAiConfig({ silent: true });
+    fetchAdminAiAudit({ silent: true });
+  } else {
+    aiAdminConfigCache = null;
+    aiAuditCache = [];
+    renderAdminAiPanel();
+  }
   return currentSession;
 }
 
@@ -716,8 +1045,13 @@ async function login() {
     setLoggedInState();
     renderHero();
     renderAccountCard();
+    refreshOnlineSessionsPolling();
     await fetchDocuments();
     await fetchUsersIfNeeded();
+    if (currentSession.role === "admin") {
+      await fetchAdminAiConfig({ silent: true });
+      await fetchAdminAiAudit({ silent: true });
+    }
     showToast("登录成功");
   } catch (_) {
     showToast("登录请求失败，请检查服务是否启动");
@@ -732,13 +1066,19 @@ async function logout() {
     credentials: "include",
   });
 
+  stopOnlineSessionsPolling();
   currentSession = null;
   usersCache = [];
   documentsCache = [];
+  onlineSessionsCache = null;
+  aiAdminConfigCache = null;
+  aiAuditCache = [];
   setLoggedInState();
   renderHero();
   renderAccountCard();
   renderDocuments();
+  renderOnlineSessions();
+  renderAdminAiPanel();
   showToast("已退出登录");
 }
 
@@ -769,6 +1109,16 @@ function bindEvents() {
   });
   $("submitLoginBtn").addEventListener("click", login);
   $("logoutBtn").addEventListener("click", logout);
+  if ($("saveAiConfigBtn")) {
+    $("saveAiConfigBtn").addEventListener("click", saveAdminAiConfig);
+  }
+  if ($("refreshAiAuditBtn")) {
+    $("refreshAiAuditBtn").addEventListener("click", async () => {
+      await fetchAdminAiConfig({ silent: true });
+      await fetchAdminAiAudit({ silent: false });
+      showToast("AI 日志已刷新");
+    });
+  }
   $("historyOverlay").addEventListener("click", (event) => {
     if (event.target === $("historyOverlay")) closeHistoryModal();
   });
@@ -802,6 +1152,10 @@ function bindEvents() {
   if (currentSession) {
     await fetchDocuments();
     await fetchUsersIfNeeded();
+    if (currentSession.role === "admin") {
+      await fetchAdminAiConfig({ silent: true });
+      await fetchAdminAiAudit({ silent: true });
+    }
   } else {
     renderDocuments();
   }

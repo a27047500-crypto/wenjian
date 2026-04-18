@@ -1122,6 +1122,30 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
     };
 
+    const hasPdfAttachment = (pdf) => {
+        if (!pdf || typeof pdf !== 'object') return false;
+        return Boolean(
+            String(pdf.key || '').trim() ||
+            String(pdf.downloadUrl || '').trim() ||
+            String(pdf.data || '').trim()
+        );
+    };
+
+    const buildPdfDownloadHref = (pdf) => {
+        if (!pdf || typeof pdf !== 'object') return '';
+        const key = String(pdf.key || '').trim();
+        if (key) {
+            const name = String(pdf.name || 'attachment.pdf').trim() || 'attachment.pdf';
+            return `/api/special-board/pdf/download?key=${encodeURIComponent(key)}&name=${encodeURIComponent(name)}`;
+        }
+        const legacyDataUrl = String(pdf.data || '').trim();
+        return legacyDataUrl || '';
+    };
+
+    const parseJsonSafe = async (resp) => {
+        try { return await resp.json(); } catch (_) { return {}; }
+    };
+
     window.showToast = (msg, type='success') => {
         const t = document.createElement('div');
         t.style.cssText = `position:fixed; top:20px; left:50%; transform:translateX(-50%); background:${type==='error'?'#ef4444':'#10b981'}; color:white; padding:10px 24px; border-radius:8px; z-index:99999; box-shadow:0 4px 12px rgba(0,0,0,0.2); font-size:13px; font-weight:600; transition:all 0.3s ease; opacity:0; margin-top:-10px; pointer-events:none;`;
@@ -2109,11 +2133,12 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 const node = isModule ? m : (Array.isArray(m.subs) ? m.subs.find(s => String(s.id) === String(pId)) : null);
                 
                 const content = document.getElementById('pdfManagerContent');
-                if (node && node.pdf && node.pdf.data) {
+                const pdf = node && node.pdf ? node.pdf : null;
+                if (hasPdfAttachment(pdf)) {
                     content.innerHTML = `
                         <div style="padding:15px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:15px;">
-                            <div style="font-weight:bold; color:var(--text-main); margin-bottom:5px;">📄 ${escapeHTML(node.pdf.name)}</div>
-                            <div style="font-size:11px; color:var(--text-sub);">上传日期：${escapeHTML(node.pdf.date)}</div>
+                            <div style="font-weight:bold; color:var(--text-main); margin-bottom:5px;">📄 ${escapeHTML(pdf.name || '未命名.pdf')}</div>
+                            <div style="font-size:11px; color:var(--text-sub);">上传日期：${escapeHTML(pdf.date || '-')}</div>
                         </div>
                         <div style="display:flex; gap:10px;">
                             <button class="btn btn-primary" style="flex:1;" onclick="app.downloadPdf()">⬇️ 下载查阅</button>
@@ -2143,28 +2168,40 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             const reader = new FileReader();
             reader.onload = async (e) => {
                 try {
-                    const base64Data = e.target.result;
+                    const dataUrl = String(e.target && e.target.result ? e.target.result : '');
+                    if (!dataUrl) throw new Error('无法读取文件');
+
+                    const uploadResp = await fetch('/api/special-board/pdf/upload', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ fileName: file.name, dataUrl })
+                    });
+                    const uploadJson = await parseJsonSafe(uploadResp);
+                    if (!uploadResp.ok || !uploadJson?.ok || !uploadJson?.file) {
+                        throw new Error(uploadJson?.error || '上传失败');
+                    }
+
                     const { moduleId, pId } = this.currentPdfTarget;
                     const isModule = !pId || pId === 'null';
                     const m = this.data.arch.find(a => String(a.id) === String(moduleId));
                     const node = isModule ? m : (Array.isArray(m.subs) ? m.subs.find(s => String(s.id) === String(pId)) : null);
                     if(!node) return;
 
-                    node.pdf = { name: file.name, data: base64Data, date: formatLocalDate(new Date()) };
-                    
+                    node.pdf = uploadJson.file;
                     if (!isModule && node.status !== '已发布') node.status = '已发布';
-                    
-                    await this.save(); 
+
+                    await this.save();
                     showToast("PDF 附件上传成功！");
-                    this.openPdfManager(moduleId, pId); 
+                    this.openPdfManager(moduleId, pId);
                     this.reRenderCurrentView();
-                } catch (err) { 
-                    showToast("上传失败: 文件过大或解析错误", "error"); 
+                } catch (err) {
+                    showToast(`上传失败: ${safeString(err && err.message ? err.message : '未知错误')}`, "error");
                 } finally {
                     input.value = '';
                 }
             };
-            reader.readAsDataURL(file); 
+            reader.readAsDataURL(file);
         },
 
         downloadPdf() {
@@ -2174,8 +2211,17 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 const m = this.data.arch.find(a => String(a.id) === String(moduleId));
                 const node = isModule ? m : (Array.isArray(m.subs) ? m.subs.find(s => String(s.id) === String(pId)) : null);
                 
-                if (node && node.pdf && node.pdf.data) {
-                    downloadBlobFile(node.pdf.data, node.pdf.name);
+                if (!node || !node.pdf) return;
+                const pdf = node.pdf;
+                const href = buildPdfDownloadHref(pdf);
+                if (!href) {
+                    showToast("该节点没有可下载的 PDF", "error");
+                    return;
+                }
+                if (String(pdf.key || '').trim()) {
+                    window.open(href, '_blank');
+                } else {
+                    downloadBlobFile(href, pdf.name || 'attachment.pdf');
                 }
             } catch(e) { console.error(e); showToast("下载失败", "error"); }
         },
@@ -2188,6 +2234,19 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                     const m = this.data.arch.find(a => String(a.id) === String(moduleId));
                     const node = isModule ? m : (Array.isArray(m.subs) ? m.subs.find(s => String(s.id) === String(pId)) : null);
                     
+                    if (node && node.pdf && String(node.pdf.key || '').trim()) {
+                        const removeResp = await fetch('/api/special-board/pdf/delete', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            credentials: 'include',
+                            body: JSON.stringify({ key: String(node.pdf.key || '').trim() })
+                        });
+                        const removeJson = await parseJsonSafe(removeResp);
+                        if (!removeResp.ok || !removeJson?.ok) {
+                            throw new Error(removeJson?.error || '服务器删除附件失败');
+                        }
+                    }
+
                     if(node) delete node.pdf;
                     
                     await this.save(); 
@@ -2204,10 +2263,10 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 if(Array.isArray(this.data.arch)) {
                     this.data.arch.forEach(m => {
                         if (!deptName || m.dept === deptName) {
-                            if (m.pdf && m.pdf.data) files.push({ dept: m.dept, module: m.l1, process: '-', level: m.level || 'L1', name: m.pdf.name, data: m.pdf.data, date: m.pdf.date, type: 'Module' });
+                            if (hasPdfAttachment(m.pdf)) files.push({ dept: m.dept, module: m.l1, process: '-', level: m.level || 'L1', name: m.pdf.name, key: m.pdf.key, data: m.pdf.data, date: m.pdf.date, type: 'Module' });
                             if (Array.isArray(m.subs)) {
                                 m.subs.forEach(s => {
-                                    if (s.pdf && s.pdf.data) files.push({ dept: m.dept, module: m.l1, process: s.l2, level: s.level || 'L3', name: s.pdf.name, data: s.pdf.data, date: s.pdf.date, type: 'Process' });
+                                    if (hasPdfAttachment(s.pdf)) files.push({ dept: m.dept, module: m.l1, process: s.l2, level: s.level || 'L3', name: s.pdf.name, key: s.pdf.key, data: s.pdf.data, date: s.pdf.date, type: 'Process' });
                                 });
                             }
                         }
@@ -2232,7 +2291,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                             </td>
                             <td style="padding:12px; font-size:11px;">${escapeHTML(f.date)}</td>
                             <td style="padding:12px; text-align:center;">
-                                <a href="javascript:void(0)" onclick="downloadBlobFile(app._pdfFolderFiles[${i}].data, app._pdfFolderFiles[${i}].name)" style="display:inline-block; padding:4px 10px; background:var(--primary-light); color:var(--primary); border-radius:4px; font-size:11px; text-decoration:none; font-weight:bold; cursor:pointer;">⬇️ 下载</a>
+                                <a href="javascript:void(0)" onclick="app.downloadPdfFromFolder(${i})" style="display:inline-block; padding:4px 10px; background:var(--primary-light); color:var(--primary); border-radius:4px; font-size:11px; text-decoration:none; font-weight:bold; cursor:pointer;">⬇️ 下载</a>
                             </td>
                         </tr>
                     `).join('');
@@ -2258,6 +2317,27 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             } catch(e) { console.error(e); }
         },
 
+        downloadPdfFromFolder(index) {
+            try {
+                const list = Array.isArray(this._pdfFolderFiles) ? this._pdfFolderFiles : [];
+                const file = list[index];
+                if (!file) return;
+                const href = buildPdfDownloadHref(file);
+                if (!href) {
+                    showToast("该文件没有可下载数据", "error");
+                    return;
+                }
+                if (String(file.key || '').trim()) {
+                    window.open(href, '_blank');
+                } else {
+                    downloadBlobFile(href, file.name || 'attachment.pdf');
+                }
+            } catch (e) {
+                console.error(e);
+                showToast("下载失败", "error");
+            }
+        },
+
         renderDeptView() {
             try {
                 const container = document.getElementById('mainContent');
@@ -2275,7 +2355,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                         <div class="dash-body">
                             <div class="kpi-row">
                                 <div class="kpi-card"><div class="kpi-icon">📄</div><div class="kpi-info"><h4>管控节点总数</h4><div class="num">${stats.total}</div></div></div>
-                                <div class="kpi-card"><div class="kpi-icon" style="background:#eff6ff;color:#3b82f6">✅</div><div class="kpi-info"><h4>内部已定稿</h4><div class="num">${stats.done}</div></div></div>
+                                <div class="kpi-card"><div class="kpi-icon" style="background:#eff6ff;color:#3b82f6">✅</div><div class="kpi-info"><h4>内部已定稿</h4><div class="num">${stats.final}</div></div></div>
                                 <div class="kpi-card"><div class="kpi-icon" style="background:#dcfce7;color:#10b981">🚀</div><div class="kpi-info"><h4>已发布生效</h4><div class="num">${stats.published}</div></div></div>
                                 <div class="kpi-card"><div class="kpi-icon" style="background:#fee2e2;color:#ef4444">⏳</div><div class="kpi-info"><h4>进行中/待办</h4><div class="num">${stats.doing + stats.todo}</div></div></div>
                             </div>
@@ -2286,7 +2366,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                                         <div class="circle-chart" style="background: ${this.getConicGradient(stats)}"><div class="circle-inner"><span class="val-big">${stats.total}</span></div></div>
                                         <div class="legend-box">
                                             <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div>已发布 ${stats.published}</div>
-                                            <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div>已定稿 ${stats.done}</div>
+                                            <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div>已定稿(未发布) ${stats.doneExclusive}</div>
                                             <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>梳理中 ${stats.doing}</div>
                                             <div class="legend-item"><div class="legend-dot" style="background:#cbd5e1"></div>未开始 ${stats.todo}</div>
                                         </div>
@@ -2311,7 +2391,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                     gridHtml += `<div style="grid-column:1/-1; text-align:center; padding:60px; color:#94a3b8; border:2px dashed #e2e8f0; border-radius:12px;"><div>暂无业务模块，请点击右上角新增</div></div>`;
                 } else {
                     deptData.forEach(m => {
-                        const mHasPdf = m.pdf && m.pdf.data;
+                        const mHasPdf = hasPdfAttachment(m.pdf);
                         
                         gridHtml += `
                             <div class="module-card" id="module-${m.id}">
@@ -2333,7 +2413,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                                         const statusClass = s.status === '已发布' ? 'c-published' : (s.status === '已定稿' ? 'c-done' : (s.status === '梳理中' ? 'c-draft' : 'c-todo'));
                                         const dotColor = s.status === '已发布' ? '#10b981' : (s.status === '已定稿' ? '#3b82f6' : (s.status === '梳理中' ? '#f59e0b' : '#cbd5e1'));
                                         const hasSipoc = s.sipoc && Array.isArray(s.sipoc.steps) && s.sipoc.steps.some(step => step.p && String(step.p).trim() !== '');
-                                        const hasDoc = s.pdf && s.pdf.data;
+                                        const hasDoc = hasPdfAttachment(s.pdf);
                                         const pendingCount = Array.isArray(s.todos) ? s.todos.filter(t => !t.done).length : 0;
 
                                         return `
@@ -2454,11 +2534,9 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                                 
                                 if (s.status === '已定稿' || s.status === '已发布') {
                                     docsFinal++;
-                                    if (s.status === '已定稿') {
-                                        if(dStat) dStat.final++;
-                                        if (s.dateDoc) {
-                                            calEvents.push({ type: 'doc', dateStr: s.dateDoc, title: `✅ [定稿] ${s.l2}`, badge: '定稿', dept: m.dept, moduleId: m.id, processId: s.id });
-                                        }
+                                    if(dStat) dStat.final++;
+                                    if (s.status === '已定稿' && s.dateDoc) {
+                                        calEvents.push({ type: 'doc', dateStr: s.dateDoc, title: `✅ [定稿] ${s.l2}`, badge: '定稿', dept: m.dept, moduleId: m.id, processId: s.id });
                                     }
                                 }
 
@@ -2560,7 +2638,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 else if (this.currentOverviewTab === 'published') {
                     chartTitle = `已正式发布文件`;
                     detailListHtml = groupDataByDept(
-                        (m, s) => s !== null && s.status === '已发布' && s.pdf && s.pdf.data, 
+                        (m, s) => s !== null && s.status === '已发布' && hasPdfAttachment(s.pdf), 
                         (m, s) => `<div class="dl-item" onclick="app.openPdfManager('${m.id}', '${s.id}')"><span>🚀 ${escapeHTML(s.l2)}</span><span class="dl-badge" style="background:#dcfce7; color:#16a34a;">在线查阅</span></div>`
                     );
                 }
@@ -3229,12 +3307,15 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         deleteProcess(mid, pid) { customConfirm("确定要删除此流程文件吗？", async () => { try { const midx = this.data.arch.findIndex(a => String(a.id) === String(mid)); this.data.arch[midx].subs = this.data.arch[midx].subs.filter(s => String(s.id) !== String(pid)); await this.save(); this.renderDeptView(); } catch(e){} }); },
         
         calcStats(deptData) { 
-            let s = { total:0, done:0, doing:0, todo:0, published:0, l1:0, l2:0, l3:0, l4:0 }; 
+            let s = { total:0, final:0, doneExclusive:0, doing:0, todo:0, published:0, l1:0, l2:0, l3:0, l4:0 }; 
             deptData.forEach(m => { 
                 if (m.level) { if(m.level === 'L1') s.l1++; else if(m.level === 'L2') s.l2++; else if(m.level === 'L3') s.l3++; else if(m.level === 'L4') s.l4++; }
                 if(Array.isArray(m.subs)) m.subs.forEach(i => { 
                     s.total++; 
-                    if(i.status === '已发布') s.published++; else if(i.status === '已定稿') s.done++; else if(i.status === '梳理中') s.doing++; else s.todo++; 
+                    if(i.status === '已发布') { s.published++; s.final++; }
+                    else if(i.status === '已定稿') { s.doneExclusive++; s.final++; }
+                    else if(i.status === '梳理中') s.doing++;
+                    else s.todo++;
                     if(i.level === 'L1') s.l1++; else if(i.level === 'L2') s.l2++; else if(i.level === 'L3') s.l3++; else if(i.level === 'L4') s.l4++; 
                 });
             }); 
@@ -3243,7 +3324,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         getConicGradient(s) { 
             if (s.total === 0) return '#e2e8f0'; 
             const pPublished = (s.published/s.total)*100;
-            const pDone = (s.done/s.total)*100; 
+            const pDone = (s.doneExclusive/s.total)*100; 
             const pDoing = (s.doing/s.total)*100; 
             return `conic-gradient(#10b981 0% ${pPublished}%, #3b82f6 ${pPublished}% ${pPublished+pDone}%, #f59e0b ${pPublished+pDone}% ${pPublished+pDone+pDoing}%, #cbd5e1 ${pPublished+pDone+pDoing}% 100%)`; 
         },
@@ -3255,8 +3336,8 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
 </script>
 
 
-
-<script src="/special-bridge.js?v=20260417-26"></script>
+<script src="/presence.js?v=20260418-2"></script>
+<script src="/special-bridge.js?v=20260418-29"></script>
 </body>
 </html>
 

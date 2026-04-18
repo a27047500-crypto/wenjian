@@ -4,7 +4,7 @@
   const REMOTE_META_ENDPOINT = '/api/special-board/meta';
   const REMOTE_STREAM_ENDPOINT = '/api/special-board/stream';
   const SESSION_ENDPOINT = '/api/session';
-  const SPECIAL_BOARD_VERSION = '20260417-26';
+  const SPECIAL_BOARD_VERSION = '20260418-29';
   const SPECIAL_BOARD_CACHE_CLEANUP_KEY = 'special_board_cache_cleanup_v1';
   const POLL_INTERVAL_MS = 1200;
   const AUTO_SAVE_DEBOUNCE_MS = 1800;
@@ -34,6 +34,7 @@
   let lastSaveErrorMessage = '';
   let supportsSpecialBoardChangesApi = true;
   let authRedirecting = false;
+  let currentSessionUser = null;
 
   function isImporting() {
     return window.__specialImporting === true;
@@ -91,12 +92,64 @@
 
   async function ensureSessionReady() {
     const result = await fetchJson(SESSION_ENDPOINT, { method: 'GET' }, 8000);
-    if (result.ok && result.data && result.data.user) return true;
+    if (result.ok && result.data && result.data.user) {
+      currentSessionUser = result.data.user;
+      return true;
+    }
     setSyncStatus('未登录，正在跳转登录页');
     setLastSaveError('登录状态已失效，请重新登录');
     renderSyncMeta();
     redirectToLogin();
     return false;
+  }
+
+  function isCurrentUserAdmin() {
+    return String(currentSessionUser?.role || '').toLowerCase() === 'admin';
+  }
+
+  function applyRoleBasedUiGuard(app, forceDeptView = false) {
+    if (isCurrentUserAdmin()) return;
+
+    document.querySelectorAll('.sidebar .btn-group .overview-btn').forEach((el) => {
+      el.style.display = 'none';
+    });
+    document.querySelectorAll('.sidebar .data-tools .tool-btn').forEach((el) => {
+      el.style.display = 'none';
+    });
+    document.querySelectorAll('.sidebar .action-dept').forEach((el) => {
+      el.style.display = 'none';
+    });
+
+    const navLabel = document.querySelector('.sidebar .nav-label');
+    if (navLabel) navLabel.textContent = '我的部门架构';
+
+    const addDeptBtn = document.querySelector('.sidebar .add-dept-btn');
+    if (addDeptBtn) addDeptBtn.style.display = 'none';
+
+    const ownDept = String(currentSessionUser?.department || '').trim();
+    if (!app || !ownDept) return;
+
+    const rawArch = Array.isArray(app.data?.arch) ? app.data.arch : [];
+    const rawPlans = Array.isArray(app.data?.plans) ? app.data.plans : [];
+    const rawDepts = Array.isArray(app.data?.depts) ? app.data.depts : [];
+    const hasOwnDept =
+      rawDepts.includes(ownDept) ||
+      rawArch.some((item) => String(item?.dept || '').trim() === ownDept) ||
+      rawPlans.some((item) => String(item?.dept || '').trim() === ownDept);
+
+    app.data.arch = rawArch.filter((item) => String(item?.dept || '').trim() === ownDept);
+    app.data.plans = rawPlans.filter((item) => String(item?.dept || '').trim() === ownDept);
+    app.data.depts = hasOwnDept ? [ownDept] : [];
+
+    if (app.data?.deptOrg && typeof app.data.deptOrg === 'object') {
+      const ownOrg = app.data.deptOrg[ownDept];
+      app.data.deptOrg = ownOrg ? { [ownDept]: ownOrg } : {};
+    }
+
+    if (!forceDeptView || typeof app.selectDept !== 'function') return;
+    if (hasOwnDept) {
+      app.selectDept(ownDept);
+    }
   }
 
   function ensureAppleStyle() {
@@ -218,7 +271,8 @@
       .special-sync-dock {
         position: fixed;
         right: 18px;
-        top: 8px;
+        bottom: 14px;
+        top: auto;
         z-index: 9999;
         display: inline-flex;
         align-items: center;
@@ -249,7 +303,8 @@
         .special-sync-dock {
           right: 10px;
           left: 10px;
-          top: 6px;
+          bottom: 10px;
+          top: auto;
           justify-content: space-between;
         }
         .special-sync-meta {
@@ -550,37 +605,10 @@
     dock.id = 'specialSyncDock';
     dock.className = 'special-sync-dock';
     dock.innerHTML = `
-      <button id="specialSyncBtn" class="special-sync-btn" type="button">保存到服务器</button>
       <span id="specialSyncMeta" class="special-sync-meta">未同步</span>
     `;
     document.body.appendChild(dock);
     renderSyncMeta();
-
-    const btn = document.getElementById('specialSyncBtn');
-    saveBtnEl = btn;
-    btn.disabled = true;
-    btn.textContent = '初始化中...';
-    btn.addEventListener('click', async () => {
-      if (!initialSyncDone) return;
-      if (btn.dataset.loading === '1') return;
-      btn.dataset.loading = '1';
-      btn.disabled = true;
-      const originalText = btn.textContent;
-      btn.textContent = '保存中...';
-      setSyncStatus('同步中...');
-      try {
-        const saved = await app.save({ manual: true, timeoutMs: 28000 });
-        if (!saved) {
-          toast(window.__specialSyncLastError || '保存到服务器失败', 'error');
-        }
-      } catch (err) {
-        toast((err && err.message) || '保存失败，请稍后重试', 'error');
-      } finally {
-        btn.dataset.loading = '0';
-        btn.disabled = false;
-        btn.textContent = originalText;
-      }
-    });
   }
 
   async function syncFromServerLatest(
@@ -751,6 +779,7 @@
 
     ensureAppleStyle();
     ensureSaveDock(app);
+    applyRoleBasedUiGuard(app, false);
     setupDirtyWatch(app);
 
     const originalSave = app.save.bind(app);
@@ -895,6 +924,7 @@
           if (fullResult.ok && fullResult.data) {
             const applied = applyRemoteSnapshot(app, fullResult.data, '已加载服务器同步数据');
             if (applied) {
+              applyRoleBasedUiGuard(app, true);
               await persistLocal(app, originalSave);
             } else {
               setSyncStatus('服务器数据格式异常');
@@ -914,6 +944,7 @@
       updateBaseline(app);
     } finally {
       markInitialSyncDone();
+      applyRoleBasedUiGuard(app, true);
     }
 
     window.addEventListener('beforeunload', () => {

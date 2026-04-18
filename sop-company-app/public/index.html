@@ -66,14 +66,6 @@
       min-width: 0;
     }
 
-    .top-center-slot {
-      flex: 0 0 auto;
-      display: flex;
-      justify-content: flex-start;
-      align-items: center;
-      margin-left: 16px;
-    }
-
     .special-entry {
       min-height: 42px;
       padding: 0 22px;
@@ -278,6 +270,113 @@
     .people-list {
       display: grid;
       gap: 12px;
+    }
+
+    .presence-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .presence-stat {
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.95);
+      padding: 10px 12px;
+    }
+
+    .presence-stat strong {
+      display: block;
+      font-size: 22px;
+      line-height: 1.1;
+      letter-spacing: -0.03em;
+      margin-bottom: 2px;
+    }
+
+    .presence-stat span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .presence-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .presence-item {
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.95);
+      padding: 10px 12px;
+    }
+
+    .presence-item strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 3px;
+    }
+
+    .presence-item p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .config-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .config-field label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+
+    .config-field input,
+    .config-field select {
+      width: 100%;
+      min-height: 38px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.95);
+      color: var(--text);
+      font: inherit;
+    }
+
+    .audit-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+      max-height: 300px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .audit-item {
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.95);
+      padding: 8px 10px;
+    }
+
+    .audit-item strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 2px;
+    }
+
+    .audit-item p {
+      margin: 0;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.55;
     }
 
     .doc-card {
@@ -605,13 +704,6 @@
     @media (max-width: 1220px) {
       .dashboard { grid-template-columns: 1fr; }
       .topbar { flex-wrap: wrap; }
-      .top-center-slot {
-        order: 3;
-        width: 100%;
-        justify-content: flex-start;
-        margin-left: 0;
-        margin-top: 6px;
-      }
       .special-entry {
         width: auto;
       }
@@ -620,6 +712,8 @@
     @media (max-width: 760px) {
       .shell { padding: 14px; }
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .presence-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .config-grid { grid-template-columns: 1fr; }
       .doc-card { flex-direction: column; }
       .doc-actions > * { flex: 1 1 0; }
       .template-body { grid-template-columns: 1fr; }
@@ -636,10 +730,8 @@
           <p>部门起草、提交审核、统一归档。</p>
         </div>
       </div>
-      <div class="top-center-slot">
-        <a class="special-entry" href="/special-board.html?v=20260417-26" target="_blank" rel="noreferrer">打开文件专项看板</a>
-      </div>
       <div class="top-actions">
+        <a class="special-entry" href="/special-board.html?v=20260418-29" target="_blank" rel="noreferrer">打开文件专项看板</a>
         <button class="ghost" id="openLoginBtn">登录</button>
         <button class="ghost" id="logoutBtn" hidden>退出</button>
       </div>
@@ -724,6 +816,53 @@
           </div>
           <div class="people-list" id="userList"></div>
         </section>
+
+        <section class="panel" id="adminOnlineCard" hidden>
+          <div class="panel-title" style="margin-bottom: 14px;">
+            <h3>在线账号监控</h3>
+            <p>含无操作保活：页面打开即算在线；并显示一个账号当前在线会话数量。</p>
+          </div>
+          <div class="presence-summary" id="onlineSummary"></div>
+          <div class="presence-list" id="onlineAccountList"></div>
+        </section>
+
+        <section class="panel" id="adminAiCard" hidden>
+          <div class="panel-title" style="margin-bottom: 14px;">
+            <h3>AI 管理</h3>
+            <p>管理员可设置 AI 开关、可选模型、每日限额，并查看调用日志。</p>
+          </div>
+          <div class="config-grid">
+            <div class="config-field">
+              <label for="aiEnabledSelect">AI 开关</label>
+              <select id="aiEnabledSelect">
+                <option value="true">开启</option>
+                <option value="false">关闭</option>
+              </select>
+            </div>
+            <div class="config-field">
+              <label for="aiDefaultModelInput">默认模型</label>
+              <input id="aiDefaultModelInput" placeholder="如 deepseek-chat">
+            </div>
+            <div class="config-field">
+              <label for="aiAllowedModelsInput">可用模型（英文逗号分隔）</label>
+              <input id="aiAllowedModelsInput" placeholder="deepseek-chat,deepseek-reasoner">
+            </div>
+            <div class="config-field">
+              <label for="aiLimitUserInput">个人每日调用上限（0=不限）</label>
+              <input id="aiLimitUserInput" type="number" min="0" step="1">
+            </div>
+            <div class="config-field">
+              <label for="aiLimitDeptInput">部门每日调用上限（0=不限）</label>
+              <input id="aiLimitDeptInput" type="number" min="0" step="1">
+            </div>
+          </div>
+          <div class="doc-actions">
+            <button class="primary" id="saveAiConfigBtn" type="button">保存 AI 配置</button>
+            <button id="refreshAiAuditBtn" type="button">刷新日志</button>
+          </div>
+          <div id="aiConfigMeta" style="margin-top:8px;color:var(--muted);font-size:12px;"></div>
+          <div class="audit-list" id="aiAuditList"></div>
+        </section>
       </aside>
     </section>
   </div>
@@ -789,7 +928,8 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=20260417-7"></script>
+  <script src="/presence.js?v=20260418-2"></script>
+  <script src="/app.js?v=20260418-31"></script>
 </body>
 </html>
 

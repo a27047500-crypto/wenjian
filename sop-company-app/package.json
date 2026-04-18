@@ -10,6 +10,7 @@
     "check": "node --check server.js"
   },
   "dependencies": {
+    "cos-nodejs-sdk-v5": "^2.14.6",
     "pg": "^8.13.1"
   },
   "engines": {

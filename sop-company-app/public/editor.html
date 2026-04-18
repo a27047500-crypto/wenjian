@@ -1149,6 +1149,9 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             <span id="branch-indicator" class="top-ribbon-title top-ribbon-indicator">分支：主线</span>
             <button type="button" id="save-server-btn-top" class="top-ribbon-btn primary" onclick="window.saveDocumentToServer()">保存到服务器</button>
             <button type="button" id="save-as-server-btn-top" class="top-ribbon-btn" onclick="window.saveDocumentAsNewFile()">另存为新文件</button>
+            <button type="button" class="top-ribbon-btn" onclick="window.openAiAssistModal('review')">AI审阅</button>
+            <button type="button" class="top-ribbon-btn" onclick="window.openAiAssistModal('write')">AI写作</button>
+            <button type="button" class="top-ribbon-btn" onclick="window.openAiAssistModal('review')">AI助手面板</button>
             <button type="button" class="top-ribbon-btn" onclick="window.saveDraft()">暂存草稿</button>
             <button type="button" class="top-ribbon-btn" onclick="window.saveBranchDraft()">分支另存</button>
             <button type="button" class="top-ribbon-btn" onclick="window.openDraftModal()">草稿箱</button>
@@ -1239,6 +1242,34 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
     </div>
     <input type="file" id="import-draft-input" accept=".json" class="hidden" onchange="window.importDraftFile(event)">
     <input type="file" id="flowchart-input" hidden="" accept="image/*" onchange="window.handleImageUpload(event, 'flowchart-preview', 'flowchart-text')">
+
+    <!-- AI 助手悬浮面板（同页可拖动） -->
+    <div id="ai-assist-modal" class="fixed z-[210] hidden no-print font-sans" style="top:86px; right:18px; width:min(640px, calc(100vw - 28px)); max-height:calc(100vh - 96px);">
+        <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden h-full">
+            <div id="ai-assist-drag-handle" class="px-4 py-3 border-b border-slate-100 flex justify-between items-center bg-slate-50 cursor-move select-none">
+                <h3 id="ai-assist-title" class="font-bold text-slate-800 text-sm">AI 助手</h3>
+                <button type="button" onclick="window.closeAiAssistModal()" class="text-slate-400 hover:text-slate-600 font-bold p-1 border rounded shadow-sm text-xs cursor-pointer">关闭</button>
+            </div>
+            <div class="p-4 flex flex-col gap-3 bg-white overflow-auto">
+                <div id="ai-assist-desc" class="text-[12px] text-slate-600 leading-6"></div>
+                <div class="flex flex-wrap gap-2 items-center">
+                    <label for="ai-assist-model" class="text-[12px] text-slate-600">模型</label>
+                    <select id="ai-assist-model" class="border border-slate-300 rounded px-2 py-1 text-[12px] min-w-[220px]"></select>
+                    <button type="button" onclick="window.captureAiAssistSource({ showToast: true })" class="text-[12px] font-bold px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded transition-colors shadow-sm border border-indigo-200">抓取正文</button>
+                </div>
+                <textarea id="ai-assist-instruction" class="w-full border border-slate-300 rounded-lg p-2 text-[12px] leading-6 outline-none" style="min-height:72px;" placeholder="输入你的要求，越具体越好。"></textarea>
+                <div class="text-[11px] text-slate-500">文档快照（自动抓取模板正文，也可手动修改）</div>
+                <textarea id="ai-assist-source" class="w-full border border-slate-200 rounded-lg p-2 text-[12px] leading-6 bg-slate-50 outline-none" style="min-height:140px;" placeholder="将自动从当前模板抓取正文..."></textarea>
+                <div class="flex flex-wrap gap-2 items-center">
+                    <button id="ai-assist-run-btn" onclick="window.runAiAssist()" class="text-[12px] font-bold px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors shadow-sm">开始生成</button>
+                    <button type="button" onclick="window.copyAiAssistResult()" class="text-[12px] font-bold px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded transition-colors shadow-sm">复制结果</button>
+                    <button type="button" onclick="window.insertAiAssistResultAtCursor()" class="text-[12px] font-bold px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded transition-colors shadow-sm border border-emerald-200">插入到光标处</button>
+                    <span id="ai-assist-status" class="text-[11px] text-slate-500"></span>
+                </div>
+                <textarea id="ai-assist-result" class="w-full border border-slate-200 rounded-lg p-2 text-[12px] leading-6 bg-slate-50 outline-none" style="min-height:230px;" placeholder="AI 输出会显示在这里。" readonly></textarea>
+            </div>
+        </div>
+    </div>
 
 
     <!-- 批注系统 HTML -->
@@ -1811,6 +1842,16 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         let currentHistoryFile = '';
         let isHistorySnapshotMode = false;
         let flowchartPageTemplateHTML = '';
+        const AI_ASSIST_ENDPOINT = '/api/ai/document-assist';
+        const AI_ASSIST_CONFIG_ENDPOINT = '/api/ai/config';
+        const AI_ASSIST_CAPTURE_MAX_CHARS = 45000;
+        let aiAssistMode = 'review';
+        let aiAssistBusy = false;
+        let aiAssistConfig = null;
+        let aiAssistLastSourceSnapshot = null;
+        let aiAssistLastResult = null;
+        let aiAssistDragInitialized = false;
+        let aiAssistDragState = null;
 
         // 【新增】强大的前端图片压缩引擎，防止原图撑爆 localStorage 容量限制
         window.compressImage = function(file, maxWidth, quality, callback) {
@@ -3987,6 +4028,665 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             };
         };
 
+        window._cleanAiText = function(value, maxChars = 0) {
+            let text = String(value || '')
+                .replace(/\u0000/g, '')
+                .replace(/[ \t]+\n/g, '\n')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+            if (Number.isFinite(maxChars) && maxChars > 0 && text.length > maxChars) {
+                text = text.slice(0, maxChars);
+            }
+            return text;
+        };
+
+        window._truncateForAi = function(text, maxChars = AI_ASSIST_CAPTURE_MAX_CHARS) {
+            const cleaned = window._cleanAiText(text);
+            if (!cleaned) return '';
+            if (!Number.isFinite(maxChars) || cleaned.length <= maxChars) return cleaned;
+            const headSize = Math.floor(maxChars * 0.7);
+            const tailSize = Math.max(0, maxChars - headSize - 30);
+            return `${cleaned.slice(0, headSize)}\n...[中间内容省略]...\n${cleaned.slice(cleaned.length - tailSize)}`;
+        };
+
+        window._buildCleanAiDomFromDocument = function() {
+            const wrapper = document.getElementById('document-wrapper');
+            if (!wrapper) return null;
+            const root = document.createElement('div');
+            root.innerHTML = window.sanitizeHTML(wrapper.innerHTML || '');
+            const removeSelectors = [
+                '.no-print', '.block-toolbar', '.table-controls', '.sipoc-action-bar',
+                '.rich-toolbar', '.delete-btn-wrapper', '.action-overlay', '.action-buttons',
+                '.resize-handle', '.rotate-handle', '.move-handle', '.delete-handle',
+                '.slot-actions', '.slot-resize', '.slot-placeholder', '.upload-click-overlay',
+                '.flowchart-upload-btn', '.section-actions', '.comment-badge', '.image-gallery-header',
+                '.gallery-title', '.gallery-toolbars', '.add-row-btn', '.delete-row-btn',
+                '.action-button', '.pdf-upload-btn'
+            ];
+            root.querySelectorAll(removeSelectors.join(',')).forEach((el) => el.remove());
+            root.querySelectorAll('script, style, button, input, select, textarea').forEach((el) => el.remove());
+            const noiseWords = new Set([
+                '➕行', '✖', 'x', '新增记录', '插入纯文本', '插入富文本',
+                '点击上传', '删除此行', '在此行下方插入新行'
+            ]);
+            root.querySelectorAll('*').forEach((el) => {
+                if (!el || !el.parentElement) return;
+                if (el.children.length > 0) return;
+                const text = window._cleanAiText(el.innerText || '', 80).toLowerCase();
+                if (!text) return;
+                if (noiseWords.has(text)) el.remove();
+            });
+            return root;
+        };
+
+        window._findNearestSectionTitle = function(el) {
+            if (!el || !el.closest) return '';
+            const owner = el.closest('.matrix-wrapper, .sipoc-step, .para-block, .rich-block, .a4-page, .a4-page-landscape') || el.parentElement;
+            if (!owner) return '';
+            const local = owner.querySelector('h1, h2, h3, h4, .section-title');
+            if (local) {
+                const title = window._cleanAiText(local.innerText || '', 100);
+                if (title) return title;
+            }
+            let probe = owner.previousElementSibling;
+            while (probe) {
+                const titleNode = probe.matches?.('h1, h2, h3, h4, .section-title') ? probe : probe.querySelector?.('h1, h2, h3, h4, .section-title');
+                if (titleNode) {
+                    const title = window._cleanAiText(titleNode.innerText || '', 100);
+                    if (title) return title;
+                }
+                probe = probe.previousElementSibling;
+            }
+            return '';
+        };
+
+        window._extractAiTableContexts = function(root, maxTables = 12) {
+            const tables = Array.from(root?.querySelectorAll?.('table') || []).slice(0, Math.max(1, maxTables));
+            return tables.map((table, idx) => {
+                const fallbackRows = Array.from(table.querySelectorAll('tr'));
+                const headerRow = table.querySelector('thead tr') || fallbackRows[0] || null;
+                const headers = headerRow
+                    ? Array.from(headerRow.children || [])
+                        .map((cell) => window._cleanAiText(cell.innerText || '', 120))
+                        .filter(Boolean)
+                        .slice(0, 16)
+                    : [];
+                const bodyRows = Array.from(table.querySelectorAll('tbody tr'));
+                const sampleSourceRows = bodyRows.length > 0 ? bodyRows : fallbackRows.slice(1);
+                const sampleRows = sampleSourceRows.slice(0, 3).map((tr) =>
+                    Array.from(tr.children || [])
+                        .map((cell) => window._cleanAiText(cell.innerText || '', 140))
+                        .filter(Boolean)
+                        .slice(0, 16)
+                ).filter((row) => row.length > 0);
+                const colCount = Math.max(
+                    headers.length,
+                    ...sampleRows.map((row) => row.length),
+                    Number(headerRow?.children?.length || 0),
+                    0
+                );
+                return {
+                    index: idx + 1,
+                    title: window._findNearestSectionTitle(table) || `表格${idx + 1}`,
+                    headers,
+                    sampleRows,
+                    rowCount: bodyRows.length || Math.max(0, fallbackRows.length - (headerRow ? 1 : 0)),
+                    colCount
+                };
+            });
+        };
+
+        window._extractAiOutline = function(root, maxItems = 30) {
+            const items = [];
+            const seen = new Set();
+            root?.querySelectorAll?.('h1, h2, h3, h4, .section-title')?.forEach((node) => {
+                if (items.length >= maxItems) return;
+                const text = window._cleanAiText(node.innerText || '', 120);
+                if (!text) return;
+                const key = text.toLowerCase();
+                if (seen.has(key)) return;
+                seen.add(key);
+                items.push(text);
+            });
+            return items;
+        };
+
+        window._getAiTargetContext = function() {
+            const context = {
+                preferredFormat: 'rich_text',
+                inTable: false,
+                tableTitle: '',
+                headers: [],
+                rowCount: 0,
+                colCount: 0,
+                activeCellText: ''
+            };
+            const selection = window.getSelection();
+            let node = null;
+            if (selection && selection.rangeCount > 0) {
+                node = selection.getRangeAt(0).commonAncestorContainer;
+            }
+            if (!node) node = document.activeElement;
+            if (node && node.nodeType === 3) node = node.parentElement;
+            if (!node || !node.closest) return context;
+
+            const table = node.closest('table');
+            const cell = node.closest('td, th');
+            if (!table) return context;
+            context.preferredFormat = 'table';
+            context.inTable = true;
+            context.tableTitle = window._findNearestSectionTitle(table);
+            const headerRow = table.querySelector('thead tr') || table.querySelector('tr');
+            context.headers = headerRow
+                ? Array.from(headerRow.children || [])
+                    .map((item) => window._cleanAiText(item.innerText || '', 80))
+                    .filter(Boolean)
+                    .slice(0, 16)
+                : [];
+            context.rowCount = table.querySelectorAll('tbody tr').length || Math.max(0, table.querySelectorAll('tr').length - (headerRow ? 1 : 0));
+            context.colCount = context.headers.length || Number(headerRow?.children?.length || 0);
+            context.activeCellText = window._cleanAiText(cell?.innerText || '', 200);
+            return context;
+        };
+
+        window.extractDocumentTextForAi = function(maxChars = AI_ASSIST_CAPTURE_MAX_CHARS) {
+            const root = window._buildCleanAiDomFromDocument();
+            if (!root) return '';
+            return window._truncateForAi(root.innerText || '', maxChars);
+        };
+
+        window.buildAiAssistStructuredSource = function(maxChars = AI_ASSIST_CAPTURE_MAX_CHARS) {
+            const root = window._buildCleanAiDomFromDocument();
+            if (!root) {
+                return {
+                    sourceText: '',
+                    plainText: '',
+                    outline: [],
+                    tables: [],
+                    targetContext: window._getAiTargetContext()
+                };
+            }
+            const plainText = window._cleanAiText(root.innerText || '');
+            const outline = window._extractAiOutline(root, 28);
+            const tables = window._extractAiTableContexts(root, 10);
+            const targetContext = window._getAiTargetContext();
+            const prefixLines = [];
+            prefixLines.push(`【目标输出格式】${targetContext.preferredFormat === 'table' ? '表格优先' : '段落/条目优先'}`);
+            if (targetContext.inTable) {
+                prefixLines.push(`【当前光标】位于表格中（${targetContext.tableTitle || '未命名表格'}）`);
+                if (targetContext.headers.length) prefixLines.push(`【当前表格列】${targetContext.headers.join(' | ')}`);
+            }
+            if (outline.length) {
+                prefixLines.push('【模板大纲】');
+                outline.slice(0, 20).forEach((item, idx) => prefixLines.push(`${idx + 1}. ${item}`));
+            }
+            if (tables.length) {
+                prefixLines.push('【表格结构摘要】');
+                tables.slice(0, 8).forEach((table) => {
+                    prefixLines.push(`- 表${table.index} ${table.title}（${table.rowCount}行/${table.colCount}列）`);
+                    if (table.headers.length) prefixLines.push(`  列: ${table.headers.join(' | ')}`);
+                    table.sampleRows.slice(0, 2).forEach((row, ridx) => prefixLines.push(`  示例${ridx + 1}: ${row.join(' | ')}`));
+                });
+            }
+            const prefix = prefixLines.join('\n').trim();
+            const reserved = Math.max(1000, maxChars - prefix.length - 40);
+            const body = window._truncateForAi(plainText, reserved);
+            const sourceText = [prefix, '【正文内容】', body].filter(Boolean).join('\n\n');
+            return {
+                sourceText,
+                plainText: window._truncateForAi(plainText, maxChars),
+                outline,
+                tables,
+                targetContext
+            };
+        };
+
+        window.buildAiAssistSnapshot = function(maxChars = AI_ASSIST_CAPTURE_MAX_CHARS) {
+            const structured = window.buildAiAssistStructuredSource(maxChars);
+            return {
+                title: window.getDocumentTitleForSave(),
+                docNo: document.getElementById('main-doc-no')?.innerText?.trim() || '',
+                department: window.getDocumentDepartmentForSave(),
+                templateKey: currentTemplateMode,
+                text: structured.sourceText,
+                sourceOutline: structured.outline,
+                sourceTables: structured.tables,
+                targetContext: structured.targetContext
+            };
+        };
+
+        window.applyAiAssistModelOptions = function(config) {
+            const select = document.getElementById('ai-assist-model');
+            if (!select) return;
+            const models = Array.isArray(config?.allowedModels) ? config.allowedModels : [];
+            select.innerHTML = models.map(model => `<option value=\"${model}\">${model}</option>`).join('');
+            if (!models.length) {
+                select.innerHTML = '<option value=\"\">无可用模型</option>';
+            }
+            const preferred = String(config?.defaultModel || '').trim();
+            if (preferred && models.includes(preferred)) {
+                select.value = preferred;
+            }
+        };
+
+        window.fetchAiAssistConfig = async function() {
+            try {
+                const response = await fetch(AI_ASSIST_CONFIG_ENDPOINT, { credentials: 'include' });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) return null;
+                aiAssistConfig = data?.config || null;
+                window.applyAiAssistModelOptions(aiAssistConfig);
+                return aiAssistConfig;
+            } catch (_) {
+                return null;
+            }
+        };
+
+        window.captureAiAssistSource = function(options = {}) {
+            const sourceEl = document.getElementById('ai-assist-source');
+            const statusEl = document.getElementById('ai-assist-status');
+            if (!sourceEl) return '';
+            const snapshot = window.buildAiAssistStructuredSource(AI_ASSIST_CAPTURE_MAX_CHARS);
+            aiAssistLastSourceSnapshot = snapshot;
+            const text = String(snapshot?.sourceText || '').trim();
+            sourceEl.value = text;
+            if (statusEl) {
+                const tableInfo = Number(snapshot?.tables?.length || 0) > 0 ? ` · 识别表格 ${snapshot.tables.length} 个` : '';
+                statusEl.innerText = text ? `已抓取正文 ${text.length} 字${tableInfo}` : '未抓到正文，请先在左侧编辑器输入内容';
+            }
+            if (options.showToast) {
+                window.showToast(text ? `已抓取正文 ${text.length} 字` : '未抓到正文，请先输入正文');
+            }
+            return text;
+        };
+
+        window.openAiAssistWindow = function() {
+            window.openAiAssistModal(aiAssistMode || 'review');
+            window.showToast('已切换为同页悬浮面板（可拖动）');
+        };
+
+        window.initAiAssistFloatingPanel = function() {
+            if (aiAssistDragInitialized) return;
+            const panel = document.getElementById('ai-assist-modal');
+            const handle = document.getElementById('ai-assist-drag-handle');
+            if (!panel || !handle) return;
+            aiAssistDragInitialized = true;
+            const startDrag = (event) => {
+                if (event.button !== 0) return;
+                if (event.target.closest('button, input, select, textarea')) return;
+                const rect = panel.getBoundingClientRect();
+                panel.style.left = `${rect.left}px`;
+                panel.style.top = `${rect.top}px`;
+                panel.style.right = 'auto';
+                aiAssistDragState = {
+                    dragging: true,
+                    offsetX: event.clientX - rect.left,
+                    offsetY: event.clientY - rect.top
+                };
+                event.preventDefault();
+            };
+            const onMove = (event) => {
+                if (!aiAssistDragState || !aiAssistDragState.dragging) return;
+                const panelWidth = panel.offsetWidth || 640;
+                const panelHeight = panel.offsetHeight || 520;
+                const maxLeft = Math.max(0, window.innerWidth - panelWidth);
+                const maxTop = Math.max(0, window.innerHeight - panelHeight);
+                const left = Math.min(maxLeft, Math.max(0, event.clientX - aiAssistDragState.offsetX));
+                const top = Math.min(maxTop, Math.max(0, event.clientY - aiAssistDragState.offsetY));
+                panel.style.left = `${left}px`;
+                panel.style.top = `${top}px`;
+            };
+            const endDrag = () => {
+                if (!aiAssistDragState) return;
+                aiAssistDragState.dragging = false;
+            };
+            handle.addEventListener('mousedown', startDrag);
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', endDrag);
+        };
+
+        window.openAiAssistModal = async function(mode = 'review') {
+            aiAssistMode = mode === 'write' ? 'write' : 'review';
+            const modal = document.getElementById('ai-assist-modal');
+            if (!modal) return;
+            window.initAiAssistFloatingPanel();
+            const titleEl = document.getElementById('ai-assist-title');
+            const descEl = document.getElementById('ai-assist-desc');
+            const inputEl = document.getElementById('ai-assist-instruction');
+            const resultEl = document.getElementById('ai-assist-result');
+            const statusEl = document.getElementById('ai-assist-status');
+            if (titleEl) titleEl.innerText = aiAssistMode === 'write' ? 'AI 写作助手（DeepSeek）' : 'AI 审阅助手（DeepSeek）';
+            if (descEl) {
+                descEl.innerText = aiAssistMode === 'write'
+                    ? '用于补充段落、优化措辞、生成可直接粘贴的正文。建议明确“写什么、给谁看、输出格式”。'
+                    : '用于识别当前文件问题，输出风险清单与修改建议。建议说明你最关心的审查点。';
+            }
+            if (inputEl) {
+                const current = String(inputEl.value || '').trim();
+                if (!current || inputEl.dataset.mode !== aiAssistMode) {
+                    inputEl.value = aiAssistMode === 'write'
+                        ? '请基于当前文件，补写“职责分工与审批节点”章节，输出可直接粘贴正文。'
+                        : '请审阅本文件，重点检查逻辑一致性、术语统一、缺失项和可执行性。';
+                }
+                inputEl.dataset.mode = aiAssistMode;
+                inputEl.placeholder = aiAssistMode === 'write'
+                    ? '例如：请写一段“流程输入与输出定义”，要求正式、可落地。'
+                    : '例如：请指出高风险问题，并给出逐条修订建议。';
+            }
+            if (statusEl) statusEl.innerText = '';
+            aiAssistLastResult = null;
+            if (resultEl && !String(resultEl.value || '').trim()) resultEl.value = '';
+            modal.classList.remove('hidden');
+            window.captureAiAssistSource();
+            const config = await window.fetchAiAssistConfig();
+            if (!config) {
+                if (statusEl) statusEl.innerText = '未能读取 AI 配置，请稍后重试';
+                return;
+            }
+            if (!config.enabled) {
+                if (statusEl) statusEl.innerText = 'AI 已被管理员关闭';
+                return;
+            }
+            if (!config.configured) {
+                if (statusEl) statusEl.innerText = 'AI 未完成服务端配置';
+                return;
+            }
+            if (statusEl) {
+                const remain = config?.limits?.remainingByUser;
+                const quotaText = remain === null ? '今日额度不限' : `今日剩余 ${remain} 次`;
+                const sourceLen = String(document.getElementById('ai-assist-source')?.value || '').trim().length;
+                statusEl.innerText = `AI 可用 · ${quotaText} · 已抓取 ${sourceLen} 字`;
+            }
+        };
+
+        window.closeAiAssistModal = function() {
+            const modal = document.getElementById('ai-assist-modal');
+            if (modal) modal.classList.add('hidden');
+        };
+
+        window.runAiAssist = async function() {
+            if (aiAssistBusy) return;
+            const instructionEl = document.getElementById('ai-assist-instruction');
+            const resultEl = document.getElementById('ai-assist-result');
+            const statusEl = document.getElementById('ai-assist-status');
+            const runBtn = document.getElementById('ai-assist-run-btn');
+            const modelEl = document.getElementById('ai-assist-model');
+            const sourceEl = document.getElementById('ai-assist-source');
+            const instruction = String(instructionEl?.value || '').trim();
+            let text = String(sourceEl?.value || '').trim();
+            if (!text) text = window.captureAiAssistSource();
+            const sourceSnapshot = aiAssistLastSourceSnapshot || window.buildAiAssistStructuredSource(AI_ASSIST_CAPTURE_MAX_CHARS);
+            const selectedModel = String(modelEl?.value || '').trim();
+            if (!selectedModel) {
+                window.showToast('当前没有可用模型，请联系管理员配置');
+                return;
+            }
+            if (!text || text.length < 20) {
+                window.showToast('文档内容太少，暂时无法进行 AI 处理');
+                return;
+            }
+
+            aiAssistBusy = true;
+            if (runBtn) {
+                runBtn.disabled = true;
+                runBtn.innerText = '生成中...';
+            }
+            if (statusEl) statusEl.innerText = '正在请求 AI，请稍候...';
+
+            try {
+                const payload = {
+                    action: aiAssistMode,
+                    model: selectedModel,
+                    instruction,
+                    text,
+                    title: window.getDocumentTitleForSave(),
+                    docNo: document.getElementById('main-doc-no')?.innerText?.trim() || '',
+                    department: window.getDocumentDepartmentForSave(),
+                    templateKey: currentTemplateMode,
+                    sourceOutline: Array.isArray(sourceSnapshot?.outline) ? sourceSnapshot.outline : [],
+                    sourceTables: Array.isArray(sourceSnapshot?.tables) ? sourceSnapshot.tables : [],
+                    targetContext: sourceSnapshot?.targetContext || window._getAiTargetContext()
+                };
+                const response = await fetch(AI_ASSIST_ENDPOINT, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    const msg = data?.error || 'AI 调用失败';
+                    if (response.status === 401 || response.status === 403) {
+                        window.showToast('请先登录后再使用 AI 助手');
+                    } else {
+                        window.showToast(msg);
+                    }
+                    if (statusEl) statusEl.innerText = `失败：${msg}`;
+                    return;
+                }
+                const content = String(data?.content || '').trim();
+                if (!content) {
+                    const msg = 'AI 返回为空，请重试';
+                    window.showToast(msg);
+                    if (statusEl) statusEl.innerText = msg;
+                    return;
+                }
+                const displayText = String(data?.displayText || content).trim();
+                aiAssistLastResult = {
+                    rawContent: content,
+                    displayText,
+                    html: String(data?.html || '').trim(),
+                    outputFormat: String(data?.outputFormat || '').trim(),
+                    insertHint: String(data?.insertHint || '').trim()
+                };
+                if (resultEl) resultEl.value = displayText || content;
+                if (statusEl) {
+                    const formatInfo = aiAssistLastResult.outputFormat ? ` · 格式 ${aiAssistLastResult.outputFormat}` : '';
+                    const hintInfo = aiAssistLastResult.insertHint ? ` · 建议插入: ${aiAssistLastResult.insertHint}` : '';
+                    statusEl.innerText = `完成 · 模型 ${data?.model || selectedModel}${formatInfo}${hintInfo}`;
+                }
+            } catch (err) {
+                console.error('runAiAssist error:', err);
+                const msg = (err && err.message) || 'AI 调用失败，请稍后再试';
+                if (statusEl) statusEl.innerText = msg;
+                window.showToast(msg);
+            } finally {
+                aiAssistBusy = false;
+                if (runBtn) {
+                    runBtn.disabled = false;
+                    runBtn.innerText = '开始生成';
+                }
+            }
+        };
+
+        window.copyAiAssistResult = async function() {
+            const resultEl = document.getElementById('ai-assist-result');
+            const text = String(resultEl?.value || '').trim();
+            if (!text) {
+                window.showToast('没有可复制的 AI 结果');
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(text);
+                window.showToast('AI 结果已复制');
+            } catch (_) {
+                if (resultEl) {
+                    resultEl.focus();
+                    resultEl.select();
+                }
+                window.showToast('已选中结果，请手动 Ctrl+C');
+            }
+        };
+
+        window.insertAiTextIntoDocument = function(text) {
+            const content = String(text || '').trim();
+            if (!content) return false;
+            window.pushUndo && window.pushUndo();
+            let inserted = false;
+            const sel = window.getSelection();
+            if (typeof currentSelectionRange !== 'undefined' && currentSelectionRange) {
+                sel.removeAllRanges();
+                sel.addRange(currentSelectionRange);
+            }
+            try {
+                inserted = document.execCommand('insertText', false, content);
+            } catch (_) {
+                inserted = false;
+            }
+
+            if (!inserted) {
+                const active = document.activeElement;
+                const fallbackEditable =
+                    active && active.getAttribute && active.getAttribute('contenteditable') === 'true'
+                        ? active
+                        : document.querySelector('#document-wrapper [contenteditable="true"]');
+                if (fallbackEditable) {
+                    fallbackEditable.focus();
+                    try {
+                        inserted = document.execCommand('insertText', false, content);
+                    } catch (_) {
+                        inserted = false;
+                    }
+                    if (!inserted) {
+                        fallbackEditable.innerText = `${fallbackEditable.innerText || ''}${fallbackEditable.innerText ? '\n' : ''}${content}`;
+                        inserted = true;
+                    }
+                }
+            }
+
+            if (inserted) {
+                window.recalculatePages && window.recalculatePages();
+            }
+            return inserted;
+        };
+
+        window.normalizeAiHtmlForInsert = function(html) {
+            const raw = String(html || '').trim();
+            if (!raw) return '';
+            const tmp = document.createElement('div');
+            tmp.innerHTML = raw
+                .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+                .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+            tmp.querySelectorAll('script, style').forEach((el) => el.remove());
+            const bodyNode = tmp.querySelector('body');
+            const normalized = bodyNode ? bodyNode.innerHTML : tmp.innerHTML;
+            return String(normalized || '').trim();
+        };
+
+        window.convertMarkdownTableToHtml = function(text) {
+            const lines = String(text || '')
+                .split('\n')
+                .map((line) => line.trim())
+                .filter(Boolean);
+            if (lines.length < 2) return '';
+            const tableLines = lines.filter((line) => line.includes('|'));
+            if (tableLines.length < 2) return '';
+            const parseLine = (line) =>
+                line
+                    .replace(/^\|/, '')
+                    .replace(/\|$/, '')
+                    .split('|')
+                    .map((cell) => window._cleanAiText(cell, 160));
+            const headers = parseLine(tableLines[0]).filter(Boolean);
+            const divider = parseLine(tableLines[1]).join('');
+            if (!headers.length || !/^[-:\s]+$/.test(divider)) return '';
+            const rows = tableLines.slice(2).map((line) => parseLine(line).slice(0, headers.length)).filter((row) => row.length > 0);
+            if (!rows.length) return '';
+            const thead = `<thead><tr>${headers.map((cell) => `<th>${cell || ''}</th>`).join('')}</tr></thead>`;
+            const tbody = `<tbody>${rows.map((row) => `<tr>${headers.map((_, idx) => `<td>${row[idx] || ''}</td>`).join('')}</tr>`).join('')}</tbody>`;
+            return `<table>${thead}${tbody}</table>`;
+        };
+
+        window.insertAiHtmlIntoDocument = function(html) {
+            const normalized = window.normalizeAiHtmlForInsert(html);
+            if (!normalized) return false;
+            window.pushUndo && window.pushUndo();
+            let inserted = false;
+            const sel = window.getSelection();
+            if (typeof currentSelectionRange !== 'undefined' && currentSelectionRange) {
+                sel.removeAllRanges();
+                sel.addRange(currentSelectionRange);
+            }
+            try {
+                inserted = document.execCommand('insertHTML', false, normalized);
+            } catch (_) {
+                inserted = false;
+            }
+            if (!inserted) {
+                const active = document.activeElement;
+                const fallbackEditable =
+                    active && active.getAttribute && active.getAttribute('contenteditable') === 'true'
+                        ? active
+                        : document.querySelector('#document-wrapper [contenteditable="true"]');
+                if (fallbackEditable) {
+                    fallbackEditable.focus();
+                    try {
+                        inserted = document.execCommand('insertHTML', false, normalized);
+                    } catch (_) {
+                        inserted = false;
+                    }
+                    if (!inserted) {
+                        fallbackEditable.insertAdjacentHTML('beforeend', normalized);
+                        inserted = true;
+                    }
+                }
+            }
+            if (inserted) {
+                window.recalculatePages && window.recalculatePages();
+            }
+            return inserted;
+        };
+
+        window.insertAiAssistResultAtCursor = function() {
+            const resultEl = document.getElementById('ai-assist-result');
+            const text = String(resultEl?.value || '').trim();
+            if (!text) {
+                window.showToast('请先生成 AI 结果');
+                return;
+            }
+            const htmlFromAi = String(aiAssistLastResult?.html || '').trim();
+            const markdownTableHtml = !htmlFromAi ? window.convertMarkdownTableToHtml(text) : '';
+            const inserted = htmlFromAi
+                ? window.insertAiHtmlIntoDocument(htmlFromAi)
+                : markdownTableHtml
+                    ? window.insertAiHtmlIntoDocument(markdownTableHtml)
+                    : window.insertAiTextIntoDocument(text);
+            if (inserted) {
+                window.showToast('AI 内容已插入，可继续编辑后保存');
+            } else {
+                window.showToast('未找到可编辑位置，请先点击正文区域再插入');
+            }
+        };
+
+        window.addEventListener('message', function(event) {
+            const data = event && event.data;
+            if (!data || typeof data !== 'object') return;
+
+            if (data.type === 'sop-ai-request-snapshot') {
+                try {
+                    event.source?.postMessage(
+                        {
+                            type: 'sop-ai-snapshot',
+                            payload: window.buildAiAssistSnapshot(AI_ASSIST_CAPTURE_MAX_CHARS)
+                        },
+                        '*'
+                    );
+                } catch (_) {}
+                return;
+            }
+
+            if (data.type === 'sop-ai-insert-text') {
+                const text = String(data?.payload?.text || '').trim();
+                const html = String(data?.payload?.html || '').trim();
+                if (!text && !html) return;
+                if (html ? window.insertAiHtmlIntoDocument(html) : window.insertAiTextIntoDocument(text)) {
+                    window.showToast('AI 窗口内容已插入当前文档');
+                } else {
+                    window.showToast('未找到可编辑位置，请先点击正文区域后重试插入');
+                }
+            }
+        });
+
         window.saveDocumentToServer = async function(saveMode = 'new-version') {
             if (!currentDocCanEdit && !isHistorySnapshotMode) {
                 window.showToast('当前文档为只读状态，不能保存');
@@ -5056,5 +5756,6 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         window.closeDraftModal = () => document.getElementById('draft-modal').classList.add('hidden');
     </script>
 
+    <script src="/presence.js?v=20260418-2"></script>
 </body></html>
 

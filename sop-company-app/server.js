@@ -270,6 +270,24 @@ function normalizeSpecialBoardData(input = {}) {
   };
 }
 
+function filterSpecialBoardDataForUser(store, user) {
+  if (!user || user.role === "admin" || !user.department) return store;
+  const dept = user.department;
+  const d = store.data || {};
+  return {
+    ...store,
+    data: {
+      depts: (d.depts || []).filter((n) => n === dept),
+      arch: (d.arch || []).filter((m) => m.dept === dept),
+      plans: (d.plans || []).filter((p) => p.dept === dept),
+      deptOrg: d.deptOrg != null && d.deptOrg[dept] != null
+        ? { [dept]: d.deptOrg[dept] }
+        : {},
+      notes: d.notes || {},
+    },
+  };
+}
+
 function hasSpecialBoardData(input = {}) {
   const data = normalizeSpecialBoardData(input);
   return Boolean(
@@ -1539,7 +1557,8 @@ async function handleApi(req, url, res) {
   if (req.method === "GET" && apiPath === "/api/special-board") {
     const user = requireAuth(req, res);
     if (!user) return true;
-    sendJson(res, 200, { ok: true, ...(await readSpecialBoardStore()) });
+    const store = await readSpecialBoardStore();
+    sendJson(res, 200, { ok: true, ...filterSpecialBoardDataForUser(store, user) });
     return true;
   }
 
@@ -1562,14 +1581,12 @@ async function handleApi(req, url, res) {
 
     const includeData = String(url.searchParams.get("full") || "").toLowerCase() === "1";
     const revision = url.searchParams.get("revision");
-    sendJson(
-      res,
-      200,
-      {
-        ok: true,
-        ...(await buildSpecialBoardChangesPayload(revision, includeData)),
-      }
-    );
+    const rawStore = await readSpecialBoardStore();
+    const filteredStore = filterSpecialBoardDataForUser(rawStore, user);
+    sendJson(res, 200, {
+      ok: true,
+      ...buildSpecialBoardChangesPayloadFromStore(filteredStore, revision, includeData),
+    });
     return true;
   }
 
@@ -1622,12 +1639,48 @@ async function handleApi(req, url, res) {
     const bodyState = await readJsonBody(req, res);
     if (!bodyState.ok) return true;
     const body = bodyState.body || {};
-    const baseRevisionRaw = body.baseRevision;
-    const baseRevision =
-      baseRevisionRaw === undefined || baseRevisionRaw === null || baseRevisionRaw === ""
-        ? null
-        : Number(baseRevisionRaw);
-    const saved = await writeSpecialBoardStore(body.data, user, { expectedRevision: baseRevision });
+
+    let saveData = body.data;
+    let baseRevision;
+
+    if (user.role !== "admin" && user.department) {
+      // Non-admin: merge only their department's data into the full store
+      const fullStore = await readSpecialBoardStore();
+      const dept = user.department;
+      const cur = fullStore.data || {};
+      const inc = body.data || {};
+      saveData = {
+        depts: [
+          ...(cur.depts || []).filter((n) => n !== dept),
+          ...(inc.depts || []).filter((n) => n === dept),
+        ],
+        arch: [
+          ...(cur.arch || []).filter((m) => m.dept !== dept),
+          ...(inc.arch || []).filter((m) => m.dept === dept),
+        ],
+        plans: [
+          ...(cur.plans || []).filter((p) => p.dept !== dept),
+          ...(inc.plans || []).filter((p) => p.dept === dept),
+        ],
+        deptOrg: {
+          ...cur.deptOrg,
+          ...(inc.deptOrg != null && inc.deptOrg[dept] != null
+            ? { [dept]: inc.deptOrg[dept] }
+            : {}),
+        },
+        notes: inc.notes || cur.notes || {},
+      };
+      // Always base on current revision to avoid 409 from cross-dept changes
+      baseRevision = fullStore.revision;
+    } else {
+      const baseRevisionRaw = body.baseRevision;
+      baseRevision =
+        baseRevisionRaw === undefined || baseRevisionRaw === null || baseRevisionRaw === ""
+          ? null
+          : Number(baseRevisionRaw);
+    }
+
+    const saved = await writeSpecialBoardStore(saveData, user, { expectedRevision: baseRevision });
     if (saved.conflict) {
       if (saved.blockedEmptyOverwrite) {
         sendJson(res, 409, {

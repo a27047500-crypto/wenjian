@@ -605,6 +605,11 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         .add-dept-btn { margin-top: 10px; padding: 12px; background: rgba(255,255,255,0.05); border: 1px dashed #475569; color: #94a3b8; text-align: center; border-radius: 6px; cursor: pointer; font-size: 12px; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 5px; }
         .add-dept-btn:hover { border-color: var(--primary); color: var(--primary); background: rgba(37, 99, 235, 0.1); }
 
+        /* 非管理员隐藏管理操作 */
+        body.non-admin .add-dept-btn { display: none !important; }
+        body.non-admin .action-dept { display: none !important; }
+        body.non-admin #headerAddBtn { display: none !important; }
+
         .btn-group { display: flex; flex-direction: column; gap: 5px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #1e293b; }
         .overview-btn { padding: 12px; background: #334155; border: 1px solid #475569; color: #e2e8f0; border-radius: 6px; cursor: pointer; font-size: 13px; transition: 0.2s; font-weight: 600; display: flex; align-items: center; gap: 10px; }
         .overview-btn:hover { background: #475569; }

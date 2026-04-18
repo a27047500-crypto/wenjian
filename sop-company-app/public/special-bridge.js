@@ -91,7 +91,13 @@
 
   async function ensureSessionReady() {
     const result = await fetchJson(SESSION_ENDPOINT, { method: 'GET' }, 8000);
-    if (result.ok && result.data && result.data.user) return true;
+    if (result.ok && result.data && result.data.user) {
+      window.__currentUser = result.data.user;
+      if (result.data.user.role !== 'admin') {
+        document.body.classList.add('non-admin');
+      }
+      return true;
+    }
     setSyncStatus('未登录，正在跳转登录页');
     setLastSaveError('登录状态已失效，请重新登录');
     renderSyncMeta();

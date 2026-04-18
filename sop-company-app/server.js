@@ -275,6 +275,7 @@ function normalizeSpecialBoardData(input = {}) {
   const plans = Array.isArray(raw.plans) ? raw.plans : [];
   const notes =
     raw.notes && typeof raw.notes === "object"
+      ? raw.notes
       : { depts: "", modules: "", flows: "", sipoc: "", drafting: "", final: "", published: "" };
   const deptOrg = raw.deptOrg && typeof raw.deptOrg === "object" ? raw.deptOrg : {};
   const reportConfig = normalizeOverviewReportConfig(raw.reportConfig, depts);

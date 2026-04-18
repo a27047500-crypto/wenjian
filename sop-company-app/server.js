@@ -1832,7 +1832,7 @@ async function handleApi(req, url, res) {
     }
     const bodyState = await readJsonBody(req, res);
     if (!bodyState.ok) return true;
-    const { messages, model } = bodyState.data;
+    const { messages, model } = bodyState.body;
     if (!Array.isArray(messages) || messages.length === 0) {
       sendJson(res, 400, { error: "消息不能为空" });
       return true;
@@ -1907,7 +1907,7 @@ async function handleApi(req, url, res) {
     }
     const bodyState = await readJsonBody(req, res);
     if (!bodyState.ok) return true;
-    const { action, model, instruction, text, title, docNo, department } = bodyState.data;
+    const { action, model, instruction, text, title, docNo, department } = bodyState.body;
     if (!text || String(text).length < 20) {
       sendJson(res, 400, { error: "正文内容不足，请先抓取或粘贴文档正文" });
       return true;

@@ -35,6 +35,7 @@
     #header-title span { font-size: 13px; font-weight: 400; opacity: 0.7; margin-left: 6px; }
     .hbtn { border: 1px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.1); color: white; border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; transition: background 0.15s; }
     .hbtn:hover { background: rgba(255,255,255,0.2); }
+    .hbtn.active { background: rgba(255,220,80,0.3); border-color: rgba(255,220,80,0.6); }
     #modelSelect { background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.25); border-radius: 8px; padding: 5px 8px; font-size: 12px; cursor: pointer; }
     #modelSelect option { background: #1e3a5f; color: white; }
 
@@ -128,6 +129,7 @@
       <option value="deepseek-reasoner">deepseek-reasoner</option>
     </select>
     <button class="hbtn" id="grabBtn">📄 抓取文档</button>
+    <button class="hbtn" id="writeGuideBtn" title="启用写作规范提示词">📐 写作规范</button>
     <button class="hbtn" id="clearBtn" title="清空对话">清空</button>
   </div>
 
@@ -166,6 +168,9 @@
   let docContext = null;         // { title, docNo, department, templateKey, text }
   let streamController = null;   // AbortController for current stream
   let isStreaming = false;
+  let writeGuideEnabled = false;
+
+  const WRITE_GUIDE_PROMPT = `\n\n---\n请按"真实业务流程 + 风险控制节点 + 职责边界 + 记录闭环"的逻辑编写体系文件，不要只按标准条款堆砌内容。\n\n编写前请先完成以下判断：\n1. 判断文件类型：制度、程序、作业指导书、技术规范、表单说明中的哪一类；\n2. 明确控制对象、控制目标和主要风险；\n3. 划定适用范围和不适用边界；\n4. 还原企业真实业务流程，确认谁发起、谁执行、谁确认、谁监督、谁批准、谁归档；\n5. 识别关键控制节点、放行条件、停用条件和异常场景；\n6. 对容易混淆的概念先定义边界。\n\n正文编写要求：\n1. 目的：写清控制目标和要防止的失控风险；\n2. 适用范围：写清适用对象、场景和排除项；\n3. 定义：只定义影响执行和判断边界的术语；\n4. 职责：拆分为发起、执行、确认、监督、批准等角色；\n5. 流程：按真实业务顺序展开，不按条款顺序拼接；\n6. 工作内容：每个步骤必须写清输入、输入要求、活动、执行角色、记录、输出、输出要求；\n7. 异常处理：必须覆盖不合格、超期、变更、争议、停用、报废、追溯等场景；\n8. 支持性文件：与上位、平行、下位文件建立接口；\n9. 记录存档：与正文动作逐项对应；\n10. 附件：提供样例、判定表、标签样式、流程图、模板等落地工具。\n\n写完后请按以下标准自检：\n1. 是否符合企业真实流程；\n2. 是否职责清晰；\n3. 是否具备可执行性；\n4. 是否具备可审核性；\n5. 是否具备异常闭环；\n6. 是否能通过记录实现追溯；\n7. 是否避免了概念混淆和职责重叠；\n8. 是否存在只适合审核、不适合执行的空话。`;
 
   const CHAT_ENDPOINT = '/api/ai/chat';
   const CONFIG_ENDPOINT = '/api/ai/config';
@@ -333,8 +338,9 @@
   }
 
   function buildSystemPrompt() {
+    const guide = writeGuideEnabled ? WRITE_GUIDE_PROMPT : '';
     if (!docContext || !docContext.text) {
-      return '你是专业的企业文件助手，擅长SOP流程分析和写作，请用中文回应。';
+      return '你是专业的企业文件助手，擅长SOP流程分析和写作，请用中文回应。' + guide;
     }
     const info = [
       docContext.title && `标题：${docContext.title}`,
@@ -342,7 +348,7 @@
       docContext.department && `部门：${docContext.department}`,
       docContext.templateKey && `模板：${docContext.templateKey}`,
     ].filter(Boolean).join('\n');
-    return `你是专业的SOP文件助手，用中文回应。\n\n用户正在编辑的文件：\n${info}\n\n文件正文：\n${docContext.text.slice(0, 6000)}`;
+    return `你是专业的SOP文件助手，用中文回应。\n\n用户正在编辑的文件：\n${info}\n\n文件正文：\n${docContext.text.slice(0, 3000)}` + guide;
   }
 
   // ── Quick actions ──────────────────────────────────────────────────────────
@@ -442,7 +448,7 @@
           if (data === '[DONE]') continue;
           try {
             const parsed = JSON.parse(data);
-            if (parsed.error) { fullContent += `\n\n❌ ${parsed.error}`; break; }
+            if (parsed.error) { fullContent += `\n\n❌ ${parsed.error?.message || String(parsed.error)}`; break; }
             const delta = parsed.choices?.[0]?.delta;
             if (delta?.reasoning_content) {
               thinkingContent += delta.reasoning_content;
@@ -462,8 +468,12 @@
       }
 
       // Finalize
+      if (!fullContent) {
+        fullContent = '⚠️ 模型本次返回空内容，请切换为 deepseek-reasoner 模型或缩短文档正文后重试。';
+      }
       const bubble = aiMsgDiv.querySelector('.bubble');
       if (bubble) {
+        bubble.innerHTML = renderMarkdown(fullContent);
         bubble._rawText = fullContent;
         bubble.classList.remove('streaming');
         const bodyDiv = aiMsgDiv.querySelector('.msg-body');
@@ -515,6 +525,14 @@
   $sendBtn.addEventListener('click', sendMessage);
   $stopBtn.addEventListener('click', stopStream);
   document.getElementById('grabBtn').addEventListener('click', grabDoc);
+  document.getElementById('writeGuideBtn').addEventListener('click', () => {
+    writeGuideEnabled = !writeGuideEnabled;
+    const btn = document.getElementById('writeGuideBtn');
+    btn.classList.toggle('active', writeGuideEnabled);
+    addMessage('system', writeGuideEnabled
+      ? '✅ 写作规范已启用：AI 将按真实业务流程+风险控制节点+职责边界+记录闭环的逻辑回答'
+      : '写作规范已关闭');
+  });
   document.getElementById('clearBtn').addEventListener('click', () => {
     conversationHistory = [];
     $messages.innerHTML = '<div class="msg system"><div class="bubble">对话已清空。</div></div>';

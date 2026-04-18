@@ -1859,6 +1859,22 @@ async function handleApi(req, url, res) {
         timeout: 120000,
       };
       const reqAi = https.request(options, (resAi) => {
+        if (resAi.statusCode !== 200) {
+          let errBody = "";
+          resAi.on("data", (chunk) => { errBody += chunk; });
+          resAi.on("end", () => {
+            try {
+              const errJson = JSON.parse(errBody);
+              const errMsg = (errJson?.error?.message || errJson?.error || `HTTP ${resAi.statusCode}`).toString().replace(/"/g, '\\"');
+              res.write(`data: {"error":"${errMsg}"}\n\ndata: [DONE]\n\n`);
+            } catch (_) {
+              res.write(`data: {"error":"DeepSeek API 错误 ${resAi.statusCode}"}\n\ndata: [DONE]\n\n`);
+            }
+            try { res.end(); } catch (_) {}
+            resolve();
+          });
+          return;
+        }
         resAi.on("data", (chunk) => { try { res.write(chunk); } catch (_) {} });
         resAi.on("end", () => { try { res.end(); } catch (_) {} resolve(); });
         resAi.on("error", () => { try { res.end(); } catch (_) {} resolve(); });

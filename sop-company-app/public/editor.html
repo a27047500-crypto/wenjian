@@ -1164,6 +1164,10 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             <button type="button" id="annotation-mode-btn-top" class="top-ribbon-btn" onclick="window.toggleAnnotationMode()">批注面板</button>
             <button type="button" class="top-ribbon-btn" onclick="window.openCommentPanel()">查看批注</button>
         </div>
+        <div class="top-ribbon-group">
+            <span class="top-ribbon-title">AI</span>
+            <button type="button" class="top-ribbon-btn primary" onclick="window.openAiAssist()">🤖 AI 助手</button>
+        </div>
     </div>
 
     <!-- 悬浮富文本工具栏 -->
@@ -5054,6 +5058,61 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         })();
 
         window.closeDraftModal = () => document.getElementById('draft-modal').classList.add('hidden');
+
+        // AI 助手窗口集成
+        (function() {
+            let aiWindow = null;
+
+            window.openAiAssist = function() {
+                if (aiWindow && !aiWindow.closed) {
+                    aiWindow.focus();
+                } else {
+                    aiWindow = window.open('/ai-assist.html', 'sop-ai-assist', 'width=960,height=720,resizable=yes,scrollbars=yes');
+                }
+            };
+
+            window.addEventListener('message', function(event) {
+                if (!event.data || typeof event.data !== 'object') return;
+
+                if (event.data.type === 'sop-ai-request-snapshot') {
+                    const wrapper = document.getElementById('document-wrapper');
+                    const titleEl = wrapper ? wrapper.querySelector('[data-field="title"], .doc-title, h1') : null;
+                    const docNoEl = wrapper ? wrapper.querySelector('[data-field="docNo"], .doc-no') : null;
+                    const deptEl = wrapper ? wrapper.querySelector('[data-field="department"], .doc-dept') : null;
+                    const snapshot = {
+                        title: titleEl ? titleEl.innerText.trim() : (document.title || ''),
+                        docNo: docNoEl ? docNoEl.innerText.trim() : '',
+                        department: deptEl ? deptEl.innerText.trim() : '',
+                        templateKey: document.body.dataset.templateKey || '',
+                        text: wrapper ? wrapper.innerText.trim() : '',
+                    };
+                    try {
+                        event.source.postMessage({ type: 'sop-ai-snapshot', payload: snapshot }, '*');
+                    } catch (_) {}
+                }
+
+                if (event.data.type === 'sop-ai-insert-text') {
+                    const text = String(event.data.payload?.text || '').trim();
+                    if (!text) return;
+                    const wrapper = document.getElementById('document-wrapper');
+                    if (!wrapper) return;
+                    wrapper.focus();
+                    const sel = window.getSelection();
+                    if (sel && sel.rangeCount > 0) {
+                        const range = sel.getRangeAt(0);
+                        range.collapse(false);
+                        const node = document.createTextNode('\n' + text);
+                        range.insertNode(node);
+                        range.setStartAfter(node);
+                        range.collapse(true);
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    } else {
+                        wrapper.appendChild(document.createTextNode('\n' + text));
+                    }
+                }
+            });
+        })();
     </script>
 
 </body></html>

@@ -1822,6 +1822,98 @@ async function handleApi(req, url, res) {
     }
   }
 
+  if (req.method === "GET" && apiPath === "/api/ai/config") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    const key = process.env.DEEPSEEK_API_KEY || "";
+    const enabled = process.env.AI_ENABLED !== "false";
+    const defaultModel = process.env.DEEPSEEK_DEFAULT_MODEL || "deepseek-chat";
+    const allowedModels = ["deepseek-chat", "deepseek-reasoner"];
+    sendJson(res, 200, {
+      config: {
+        enabled,
+        configured: !!key,
+        defaultModel,
+        allowedModels,
+        limits: { remainingByUser: null, remainingByDept: null },
+      },
+    });
+    return true;
+  }
+
+  if (req.method === "POST" && apiPath === "/api/ai/document-assist") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    const key = process.env.DEEPSEEK_API_KEY || "";
+    if (!key) {
+      sendJson(res, 503, { error: "DeepSeek API Key 未配置，请联系管理员在服务器环境变量中设置 DEEPSEEK_API_KEY" });
+      return true;
+    }
+    const bodyState = await readJsonBody(req, res);
+    if (!bodyState.ok) return true;
+    const { action, model, instruction, text, title, docNo, department } = bodyState.data;
+    if (!text || String(text).length < 20) {
+      sendJson(res, 400, { error: "正文内容不足，请先抓取或粘贴文档正文" });
+      return true;
+    }
+    const safeModel = ["deepseek-chat", "deepseek-reasoner"].includes(model) ? model : "deepseek-chat";
+    let systemPrompt, userPrompt;
+    if (action === "review") {
+      systemPrompt = "你是一位专业的SOP（标准作业程序）审阅专家，擅长发现流程文件中的高风险缺陷、逻辑漏洞和改进空间。请用中文回应，以结构化方式列出问题和建议。";
+      userPrompt = `请对以下SOP文件进行专业审阅，指出主要问题和改进建议。\n\n文件标题：${title || "未知"}\n文号：${docNo || "无"}\n部门：${department || "未知"}\n\n${instruction ? `用户特别要求：${instruction}\n\n` : ""}正文内容：\n${text}`;
+    } else {
+      systemPrompt = "你是一位专业的SOP文件写作助手，擅长为企业编写清晰、规范的标准作业程序文件。请用中文回应。";
+      userPrompt = `请根据以下要求和文档信息，完成写作任务。\n\n文件标题：${title || "未知"}\n文号：${docNo || "无"}\n部门：${department || "未知"}\n\n用户要求：${instruction || "请优化并扩展以下内容"}\n\n现有内容：\n${text}`;
+    }
+    try {
+      const https = require("https");
+      const payload = JSON.stringify({
+        model: safeModel,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 2000,
+        stream: false,
+      });
+      const result = await new Promise((resolve, reject) => {
+        const options = {
+          hostname: "api.deepseek.com",
+          path: "/chat/completions",
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${key}`,
+            "Content-Length": Buffer.byteLength(payload),
+          },
+          timeout: 60000,
+        };
+        const reqAi = https.request(options, (resAi) => {
+          let data = "";
+          resAi.on("data", (chunk) => { data += chunk; });
+          resAi.on("end", () => {
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.error) reject(new Error(parsed.error.message || "DeepSeek API error"));
+              else resolve(parsed);
+            } catch (_) {
+              reject(new Error("DeepSeek 响应解析失败"));
+            }
+          });
+        });
+        reqAi.on("error", reject);
+        reqAi.on("timeout", () => { reqAi.destroy(); reject(new Error("DeepSeek API 请求超时")); });
+        reqAi.write(payload);
+        reqAi.end();
+      });
+      const content = result?.choices?.[0]?.message?.content || "";
+      sendJson(res, 200, { content, model: safeModel });
+    } catch (err) {
+      sendJson(res, 502, { error: err.message || "DeepSeek API 调用失败" });
+    }
+    return true;
+  }
+
   return false;
 }
 

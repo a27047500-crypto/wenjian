@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 助手窗口</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --line: #d9e1ea;
+      --text: #0f172a;
+      --muted: #64748b;
+      --primary: #2563eb;
+      --primary-weak: #eff6ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #f8fbff, var(--bg));
+      min-height: 100vh;
+    }
+    .page { max-width: 1100px; margin: 0 auto; padding: 16px; }
+    .head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+    .head h1 { margin: 0; font-size: 20px; }
+    .head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .grow { flex: 1 1 200px; }
+    .label { color: var(--muted); font-size: 12px; margin-bottom: 4px; display: block; }
+    .input, .select, .textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+    }
+    .textarea { min-height: 120px; resize: vertical; }
+    .textarea.result { min-height: 300px; background: #f8fafc; }
+    .btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
+      color: var(--text);
+      font-weight: 600;
+    }
+    .btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .btn.weak { background: var(--primary-weak); color: #1d4ed8; border-color: #bfdbfe; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .meta-item {
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      background: #fcfdff;
+      min-height: 58px;
+    }
+    .meta-item strong { display: block; color: #334155; margin-bottom: 2px; }
+    .status { font-size: 12px; color: var(--muted); }
+    .warn {
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid #fde68a;
+      background: #fffbeb;
+      color: #92400e;
+      font-size: 12px;
+    }
+    @media (max-width: 860px) {
+      .meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="head">
+      <div>
+        <h1>🤖 AI 助手窗口</h1>
+        <p>独立于编辑器运行：不会自动改文档，只有你点"插入到编辑器"才回填。</p>
+      </div>
+      <div class="row">
+        <button class="btn" id="reloadSnapshotBtn" type="button">从编辑器抓取正文</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <div class="grow">
+          <label class="label" for="aiMode">任务类型</label>
+          <select id="aiMode" class="select">
+            <option value="review">AI审阅</option>
+            <option value="write">AI写作</option>
+          </select>
+        </div>
+        <div class="grow">
+          <label class="label" for="aiModel">模型</label>
+          <select id="aiModel" class="select"></select>
+        </div>
+        <div class="grow">
+          <label class="label">状态</label>
+          <div id="aiStatus" class="status">初始化中...</div>
+        </div>
+      </div>
+      <div id="configHint" class="warn" style="margin-top: 10px; display: none;"></div>
+      <div class="meta" id="docMeta"></div>
+    </section>
+
+    <section class="card">
+      <label class="label" for="aiInstruction">你的要求</label>
+      <textarea id="aiInstruction" class="textarea" placeholder="例如：请审阅当前流程并指出高风险缺陷；或补写职责分工章节。"></textarea>
+    </section>
+
+    <section class="card">
+      <label class="label" for="aiInput">文档快照（可手工补充）</label>
+      <textarea id="aiInput" class="textarea" placeholder="将自动从编辑器抓取，也可手工粘贴。"></textarea>
+      <div class="row" style="margin-top: 10px;">
+        <button id="runBtn" class="btn primary" type="button">开始生成</button>
+        <button id="copyBtn" class="btn" type="button">复制结果</button>
+        <button id="insertBtn" class="btn weak" type="button">插入到编辑器</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <label class="label" for="aiResult">AI 输出</label>
+      <textarea id="aiResult" class="textarea result" readonly placeholder="结果会显示在这里。"></textarea>
+    </section>
+  </div>
+
+  <script>
+    const AI_ENDPOINT = '/api/ai/document-assist';
+    const AI_CONFIG_ENDPOINT = '/api/ai/config';
+    const SNAPSHOT_REQUEST_TYPE = 'sop-ai-request-snapshot';
+    const SNAPSHOT_RESPONSE_TYPE = 'sop-ai-snapshot';
+    const INSERT_REQUEST_TYPE = 'sop-ai-insert-text';
+
+    let aiConfig = null;
+    let docSnapshot = {
+      title: '',
+      docNo: '',
+      department: '',
+      templateKey: '',
+      text: '',
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function setStatus(text) {
+      $('aiStatus').textContent = text || '';
+    }
+
+    function updateMeta() {
+      const items = [
+        ['标题', docSnapshot.title || '-'],
+        ['文号', docSnapshot.docNo || '-'],
+        ['部门', docSnapshot.department || '-'],
+        ['模板', docSnapshot.templateKey || '-'],
+      ];
+      $('docMeta').innerHTML = items
+        .map(([label, value]) => `<div class="meta-item"><strong>${label}</strong>${String(value || '')}</div>`)
+        .join('');
+    }
+
+    function fillModelOptions(config) {
+      const select = $('aiModel');
+      const models = Array.isArray(config?.allowedModels) ? config.allowedModels : [];
+      select.innerHTML = models.map((m) => `<option value="${m}">${m}</option>`).join('');
+      if (models.length === 0) {
+        select.innerHTML = '<option value="">无可用模型</option>';
+      }
+      const preferred = String(config?.defaultModel || '');
+      if (preferred && models.includes(preferred)) {
+        select.value = preferred;
+      }
+    }
+
+    function applySnapshot(snapshot = {}) {
+      docSnapshot = {
+        title: String(snapshot.title || ''),
+        docNo: String(snapshot.docNo || ''),
+        department: String(snapshot.department || ''),
+        templateKey: String(snapshot.templateKey || ''),
+        text: String(snapshot.text || ''),
+      };
+      if (docSnapshot.text) {
+        $('aiInput').value = docSnapshot.text;
+      }
+      updateMeta();
+      setStatus('已更新文档快照');
+    }
+
+    function requestSnapshotFromOpener() {
+      if (!window.opener || window.opener.closed) {
+        setStatus('未检测到编辑器窗口，可手工粘贴正文');
+        return;
+      }
+      try {
+        window.opener.postMessage({ type: SNAPSHOT_REQUEST_TYPE }, '*');
+        setStatus('已请求编辑器正文快照...');
+      } catch (_) {
+        setStatus('请求编辑器快照失败，请手工粘贴正文');
+      }
+    }
+
+    async function loadAiConfig() {
+      try {
+        const response = await fetch(AI_CONFIG_ENDPOINT, { credentials: 'include' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          setStatus(data.error || '读取 AI 配置失败');
+          return;
+        }
+        aiConfig = data.config || null;
+        fillModelOptions(aiConfig);
+        const hint = $('configHint');
+        if (!aiConfig?.enabled) {
+          hint.style.display = '';
+          hint.textContent = 'AI 功能已被管理员关闭。';
+        } else if (!aiConfig?.configured) {
+          hint.style.display = '';
+          hint.textContent = 'AI 已开启，但服务端尚未配置有效 DeepSeek Key。请在服务器设置环境变量 DEEPSEEK_API_KEY。';
+        } else {
+          hint.style.display = 'none';
+        }
+
+        const limits = aiConfig?.limits || {};
+        const remainUser = limits.remainingByUser === null ? '不限' : String(limits.remainingByUser);
+        const remainDept = limits.remainingByDept === null ? '不限' : String(limits.remainingByDept);
+        setStatus(`配置已加载 · 个人剩余 ${remainUser} 次 · 部门剩余 ${remainDept} 次`);
+      } catch (_) {
+        setStatus('读取 AI 配置失败');
+      }
+    }
+
+    async function runAi() {
+      const action = String($('aiMode').value || 'review');
+      const model = String($('aiModel').value || '').trim();
+      const instruction = String($('aiInstruction').value || '').trim();
+      const text = String($('aiInput').value || '').trim();
+      if (!text || text.length < 20) {
+        setStatus('正文太短，请先抓取/粘贴正文');
+        return;
+      }
+      if (!model) {
+        setStatus('当前没有可用模型');
+        return;
+      }
+
+      $('runBtn').disabled = true;
+      setStatus('AI 生成中，请稍候...');
+
+      try {
+        const payload = {
+          action,
+          model,
+          instruction,
+          text,
+          title: docSnapshot.title,
+          docNo: docSnapshot.docNo,
+          department: docSnapshot.department,
+          templateKey: docSnapshot.templateKey,
+        };
+        const response = await fetch(AI_ENDPOINT, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          setStatus(`失败：${data.error || 'AI 调用失败'}`);
+          return;
+        }
+        $('aiResult').value = String(data.content || '').trim();
+        setStatus(`完成 · 模型 ${data.model || model}`);
+      } catch (_) {
+        setStatus('失败：AI 调用异常');
+      } finally {
+        $('runBtn').disabled = false;
+      }
+    }
+
+    async function copyResult() {
+      const text = String($('aiResult').value || '').trim();
+      if (!text) {
+        setStatus('没有可复制内容');
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus('已复制 AI 结果');
+      } catch (_) {
+        $('aiResult').focus();
+        $('aiResult').select();
+        setStatus('已选中结果，请手工 Ctrl+C');
+      }
+    }
+
+    function insertToEditor() {
+      const text = String($('aiResult').value || '').trim();
+      if (!text) {
+        setStatus('请先生成 AI 结果');
+        return;
+      }
+      if (!window.opener || window.opener.closed) {
+        setStatus('未检测到编辑器窗口，无法插入');
+        return;
+      }
+      try {
+        window.opener.postMessage({
+          type: INSERT_REQUEST_TYPE,
+          payload: { text },
+        }, '*');
+        setStatus('已发送到编辑器，请在编辑器里确认插入位置');
+      } catch (_) {
+        setStatus('发送到编辑器失败');
+      }
+    }
+
+    window.addEventListener('message', (event) => {
+      const data = event.data || {};
+      if (!data || typeof data !== 'object') return;
+      if (data.type !== SNAPSHOT_RESPONSE_TYPE) return;
+      applySnapshot(data.payload || {});
+    });
+
+    $('reloadSnapshotBtn').addEventListener('click', requestSnapshotFromOpener);
+    $('runBtn').addEventListener('click', runAi);
+    $('copyBtn').addEventListener('click', copyResult);
+    $('insertBtn').addEventListener('click', insertToEditor);
+
+    (async function init() {
+      await loadAiConfig();
+      updateMeta();
+      requestSnapshotFromOpener();
+    })();
+  </script>
+</body>
+</html>

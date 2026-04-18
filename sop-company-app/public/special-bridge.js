@@ -110,6 +110,10 @@
     if (result.ok && result.data && result.data.user) {
       currentSessionUser = result.data.user;
       window.__specialSessionUser = currentSessionUser;
+      window.__currentUser = currentSessionUser;
+      if (currentSessionUser.role !== 'admin') {
+        document.body.classList.add('non-admin');
+      }
       return true;
     }
     setSyncStatus('未登录，正在跳转登录页');

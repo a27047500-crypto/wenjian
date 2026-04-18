@@ -41,10 +41,13 @@
 
     /* Doc context banner */
     #docBanner { display: none; padding: 8px 14px; background: var(--doc-bg); border-bottom: 1px solid var(--doc-border); font-size: 12px; color: #1e40af; flex-shrink: 0; }
-    #docBanner.show { display: flex; align-items: center; gap: 8px; }
-    #docBannerText { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #docBanner.show { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    #docBannerText { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #docCharCount { font-size: 11px; color: #6b7280; white-space: nowrap; }
+    #docCharCount.warn { color: #b45309; font-weight: 600; }
     #docBanner button { border: 1px solid var(--doc-border); background: white; color: #1e40af; border-radius: 6px; padding: 2px 8px; font-size: 11px; cursor: pointer; white-space: nowrap; }
     #docBanner button:hover { background: #dbeafe; }
+    #fullDocBtn.active { background: #dbeafe; font-weight: 700; }
 
     /* Config warning */
     #configWarn { display: none; padding: 8px 14px; background: var(--warn-bg); border-bottom: 1px solid var(--warn-border); font-size: 12px; color: var(--warn-text); flex-shrink: 0; }
@@ -137,6 +140,8 @@
   <div id="docBanner">
     <span>📄</span>
     <span id="docBannerText"></span>
+    <span id="docCharCount"></span>
+    <button id="fullDocBtn" title="切换全文/摘要模式">全文</button>
     <button id="releaseDocBtn">解除文档</button>
   </div>
 
@@ -169,6 +174,10 @@
   let streamController = null;   // AbortController for current stream
   let isStreaming = false;
   let writeGuideEnabled = false;
+  let fullDocMode = false;        // send full document text vs. first 8000 chars
+
+  const DOC_LIMIT_DEFAULT = 8000;   // chars in truncation mode
+  const DOC_LIMIT_FULL = 80000;     // chars in full-doc mode (covers ~40K word docs)
 
   const WRITE_GUIDE_PROMPT = `\n\n---\n请按"真实业务流程 + 风险控制节点 + 职责边界 + 记录闭环"的逻辑编写体系文件，不要只按标准条款堆砌内容。\n\n编写前请先完成以下判断：\n1. 判断文件类型：制度、程序、作业指导书、技术规范、表单说明中的哪一类；\n2. 明确控制对象、控制目标和主要风险；\n3. 划定适用范围和不适用边界；\n4. 还原企业真实业务流程，确认谁发起、谁执行、谁确认、谁监督、谁批准、谁归档；\n5. 识别关键控制节点、放行条件、停用条件和异常场景；\n6. 对容易混淆的概念先定义边界。\n\n正文编写要求：\n1. 目的：写清控制目标和要防止的失控风险；\n2. 适用范围：写清适用对象、场景和排除项；\n3. 定义：只定义影响执行和判断边界的术语；\n4. 职责：拆分为发起、执行、确认、监督、批准等角色；\n5. 流程：按真实业务顺序展开，不按条款顺序拼接；\n6. 工作内容：每个步骤必须写清输入、输入要求、活动、执行角色、记录、输出、输出要求；\n7. 异常处理：必须覆盖不合格、超期、变更、争议、停用、报废、追溯等场景；\n8. 支持性文件：与上位、平行、下位文件建立接口；\n9. 记录存档：与正文动作逐项对应；\n10. 附件：提供样例、判定表、标签样式、流程图、模板等落地工具。\n\n写完后请按以下标准自检：\n1. 是否符合企业真实流程；\n2. 是否职责清晰；\n3. 是否具备可执行性；\n4. 是否具备可审核性；\n5. 是否具备异常闭环；\n6. 是否能通过记录实现追溯；\n7. 是否避免了概念混淆和职责重叠；\n8. 是否存在只适合审核、不适合执行的空话。`;
 
@@ -321,18 +330,47 @@
   }
 
   // ── Document context ───────────────────────────────────────────────────────
+  const $docCharCount = document.getElementById('docCharCount');
+  const $fullDocBtn = document.getElementById('fullDocBtn');
+
+  function updateDocBanner() {
+    if (!docContext) return;
+    const total = (docContext.text || '').length;
+    const limit = fullDocMode ? DOC_LIMIT_FULL : DOC_LIMIT_DEFAULT;
+    const sending = Math.min(total, limit);
+    const truncated = total > limit;
+    const label = [docContext.title, docContext.department].filter(Boolean).join(' · ') || '文档';
+    $docBannerText.textContent = `📄 已加载：${label}`;
+    if (total === 0) {
+      $docCharCount.textContent = '';
+    } else if (truncated) {
+      $docCharCount.textContent = `发送前${sending.toLocaleString()}字 / 共${total.toLocaleString()}字`;
+      $docCharCount.className = 'warn';
+    } else {
+      $docCharCount.textContent = `共${total.toLocaleString()}字，全部发送`;
+      $docCharCount.className = '';
+    }
+    $fullDocBtn.classList.toggle('active', fullDocMode);
+    $fullDocBtn.title = fullDocMode ? '当前：全文模式（点击切换为摘要）' : '当前：仅前8000字（点击切换为全文）';
+  }
+
   function setDocContext(snapshot) {
     docContext = snapshot;
-    const label = [snapshot.title, snapshot.department].filter(Boolean).join(' · ') || '文档';
-    $docBannerText.textContent = `📄 已加载：${label}`;
     $docBanner.classList.add('show');
+    updateDocBanner();
     updateQuickActions();
-    addMessage('system', `✅ 已抓取文档「${label}」，可以开始分析或提问`);
+    const label = [snapshot.title, snapshot.department].filter(Boolean).join(' · ') || '文档';
+    const total = (snapshot.text || '').length;
+    const hint = total > DOC_LIMIT_DEFAULT && !fullDocMode
+      ? `（文档共${total.toLocaleString()}字，当前仅发送前${DOC_LIMIT_DEFAULT}字，可点击「全文」按钮切换全文模式）`
+      : '';
+    addMessage('system', `✅ 已抓取文档「${label}」，可以开始分析或提问${hint}`);
   }
 
   function releaseDoc() {
     docContext = null;
     $docBanner.classList.remove('show');
+    $docCharCount.textContent = '';
     updateQuickActions();
     addMessage('system', '已解除文档关联');
   }
@@ -348,7 +386,12 @@
       docContext.department && `部门：${docContext.department}`,
       docContext.templateKey && `模板：${docContext.templateKey}`,
     ].filter(Boolean).join('\n');
-    return `你是专业的SOP文件助手，用中文回应。\n\n用户正在编辑的文件：\n${info}\n\n文件正文：\n${docContext.text.slice(0, 3000)}` + guide;
+    const limit = fullDocMode ? DOC_LIMIT_FULL : DOC_LIMIT_DEFAULT;
+    const text = docContext.text.slice(0, limit);
+    const truncNote = docContext.text.length > limit
+      ? `\n\n[注：文档共${docContext.text.length}字，受上下文限制仅展示前${limit}字]`
+      : '';
+    return `你是专业的SOP文件助手，用中文回应。\n\n用户正在编辑的文件：\n${info}\n\n文件正文：\n${text}${truncNote}` + guide;
   }
 
   // ── Quick actions ──────────────────────────────────────────────────────────
@@ -539,6 +582,15 @@
     addMessage('system', '你好！我是 AI 助手。点击「抓取文档」可以让我分析你正在编辑的文件，或直接向我提问。');
   });
   document.getElementById('releaseDocBtn').addEventListener('click', releaseDoc);
+  $fullDocBtn.addEventListener('click', () => {
+    fullDocMode = !fullDocMode;
+    updateDocBanner();
+    if (docContext) {
+      addMessage('system', fullDocMode
+        ? `✅ 已切换为全文模式，将发送完整文档（共${(docContext.text||'').length.toLocaleString()}字），建议使用 deepseek-reasoner`
+        : `已切换为摘要模式，仅发送前${DOC_LIMIT_DEFAULT}字`);
+    }
+  });
 
   // ── Init ───────────────────────────────────────────────────────────────────
   async function init() {

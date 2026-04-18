@@ -17,12 +17,16 @@ const HISTORY_DIR = path.join(DATA_ROOT, "history");
 const METADATA_DIR = path.join(DATA_ROOT, "metadata");
 const USERS_FILE = path.join(DATA_ROOT, "users.json");
 const SPECIAL_BOARD_FILE = path.join(DATA_ROOT, "special-board.json");
+const AI_ADMIN_CONFIG_FILE = path.join(DATA_ROOT, "ai-admin-config.json");
+const AI_AUDIT_LOG_FILE = path.join(DATA_ROOT, "ai-assist-audit.log");
 const SPECIAL_BOARD_STORAGE = String(process.env.SPECIAL_BOARD_STORAGE || "file").toLowerCase();
 const PG_SSL = String(process.env.PG_SSL || "").toLowerCase() === "true";
 
 const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME || "sop_session";
 const SESSION_COOKIE_SECURE = process.env.SESSION_COOKIE_SECURE === "true";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
+const SESSION_ONLINE_WINDOW_MS = Number(process.env.SESSION_ONLINE_WINDOW_MS || 90 * 1000);
+const SESSION_ACTIVE_WINDOW_MS = Number(process.env.SESSION_ACTIVE_WINDOW_MS || 40 * 1000);
 
 const MAX_BODY_SIZE = Number(process.env.MAX_BODY_SIZE || 200 * 1024 * 1024);
 const PASSWORD_PBKDF2_ITERATIONS = Number(process.env.PASSWORD_PBKDF2_ITERATIONS || 210000);
@@ -75,6 +79,7 @@ fs.mkdirSync(METADATA_DIR, { recursive: true });
 const sessions = new Map();
 const loginAttempts = new Map();
 const specialBoardStreamClients = new Set();
+const onlineSessionStates = new Map();
 let specialBoardPgPool = null;
 let specialBoardDbReady = false;
 
@@ -251,6 +256,18 @@ function metadataPath(id) {
   return path.join(METADATA_DIR, `${sanitizeId(id)}.json`);
 }
 
+function normalizeOverviewReportConfig(input = {}, knownDepts = []) {
+  const raw = input && typeof input === "object" ? input : {};
+  const allDepts = Array.isArray(knownDepts)
+    ? knownDepts.map((v) => String(v || "").trim()).filter(Boolean)
+    : [];
+  const hiddenDeptsRaw = Array.isArray(raw.hiddenDepts) ? raw.hiddenDepts : [];
+  const hiddenDepts = [...new Set(hiddenDeptsRaw.map((v) => String(v || "").trim()).filter(Boolean))];
+  const filteredHiddenDepts =
+    allDepts.length > 0 ? hiddenDepts.filter((dept) => allDepts.includes(dept)) : hiddenDepts;
+  return { hiddenDepts: filteredHiddenDepts };
+}
+
 function normalizeSpecialBoardData(input = {}) {
   const raw = input && typeof input === "object" ? input : {};
   const depts = Array.isArray(raw.depts) ? raw.depts.map((v) => String(v || "").trim()).filter(Boolean) : [];
@@ -261,12 +278,14 @@ function normalizeSpecialBoardData(input = {}) {
       ? raw.notes
       : { depts: "", modules: "", flows: "", sipoc: "", drafting: "", final: "", published: "" };
   const deptOrg = raw.deptOrg && typeof raw.deptOrg === "object" ? raw.deptOrg : {};
+  const reportConfig = normalizeOverviewReportConfig(raw.reportConfig, depts);
   return {
     depts,
     arch,
     notes,
     plans,
     deptOrg,
+    reportConfig,
   };
 }
 
@@ -725,6 +744,241 @@ function getUserFromSession(req) {
 function getClientIp(req) {
   const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
   return forwarded || req.socket?.remoteAddress || "unknown";
+}
+
+function cleanupOnlineSessionStates(now = Date.now()) {
+  const staleAfterMs = Math.max(SESSION_ONLINE_WINDOW_MS * 10, 30 * 60 * 1000);
+  for (const [token, item] of onlineSessionStates.entries()) {
+    const seenMs = Number(item?.latestSeenMs || 0);
+    if (!seenMs || now - seenMs > staleAfterMs) {
+      onlineSessionStates.delete(token);
+    }
+  }
+}
+
+function recordOnlineSession(req, user, options = {}) {
+  if (!user) return;
+  const session = getSession(req);
+  if (!session?.token) return;
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const token = String(session.token);
+  const ip = String(getClientIp(req) || "unknown");
+  const active = !!options.active;
+
+  const current = onlineSessionStates.get(token) || {
+    token,
+    username: String(user.username || ""),
+    displayName: String(user.displayName || user.username || ""),
+    role: String(user.role || "viewer"),
+    department: String(user.department || ""),
+    latestSeenAt: nowIso,
+    latestSeenMs: nowMs,
+    lastActiveAt: active ? nowIso : "",
+    lastActiveMs: active ? nowMs : 0,
+    ips: [],
+  };
+
+  current.username = String(user.username || current.username || "");
+  current.displayName = String(user.displayName || current.displayName || current.username || "");
+  current.role = String(user.role || current.role || "viewer");
+  current.department = String(user.department || current.department || "");
+  current.latestSeenAt = nowIso;
+  current.latestSeenMs = nowMs;
+  if (active) {
+    current.lastActiveAt = nowIso;
+    current.lastActiveMs = nowMs;
+  }
+  if (!Array.isArray(current.ips)) current.ips = [];
+  if (ip && !current.ips.includes(ip)) {
+    current.ips.push(ip);
+    if (current.ips.length > 8) current.ips = current.ips.slice(-8);
+  }
+
+  onlineSessionStates.set(token, current);
+  cleanupOnlineSessionStates(nowMs);
+}
+
+function buildOnlineSessionsPayload() {
+  const nowMs = Date.now();
+  cleanupOnlineSessionStates(nowMs);
+  const onlineRows = [...onlineSessionStates.values()].filter((item) => nowMs - Number(item.latestSeenMs || 0) <= SESSION_ONLINE_WINDOW_MS);
+  const byUserMap = new Map();
+  let activeSessions = 0;
+
+  for (const sessionRow of onlineRows) {
+    const isActive = nowMs - Number(sessionRow.lastActiveMs || 0) <= SESSION_ACTIVE_WINDOW_MS;
+    if (isActive) activeSessions += 1;
+    const key = String(sessionRow.username || "");
+    const existing = byUserMap.get(key) || {
+      username: key,
+      displayName: String(sessionRow.displayName || key),
+      role: String(sessionRow.role || "viewer"),
+      department: String(sessionRow.department || ""),
+      onlineSessions: 0,
+      activeSessions: 0,
+      latestSeenAt: String(sessionRow.latestSeenAt || ""),
+      latestSeenMs: Number(sessionRow.latestSeenMs || 0),
+      ips: [],
+    };
+    existing.onlineSessions += 1;
+    if (isActive) existing.activeSessions += 1;
+    if (Number(sessionRow.latestSeenMs || 0) > Number(existing.latestSeenMs || 0)) {
+      existing.latestSeenMs = Number(sessionRow.latestSeenMs || 0);
+      existing.latestSeenAt = String(sessionRow.latestSeenAt || "");
+    }
+    const sessionIps = Array.isArray(sessionRow.ips) ? sessionRow.ips : [];
+    for (const ip of sessionIps) {
+      if (ip && !existing.ips.includes(ip)) existing.ips.push(ip);
+    }
+    byUserMap.set(key, existing);
+  }
+
+  const byUser = [...byUserMap.values()]
+    .map((item) => ({
+      username: item.username,
+      displayName: item.displayName,
+      role: item.role,
+      department: item.department,
+      onlineSessions: Number(item.onlineSessions || 0),
+      activeSessions: Number(item.activeSessions || 0),
+      latestSeenAt: item.latestSeenAt,
+      ips: item.ips.slice(0, 8),
+      ipCount: item.ips.length,
+    }))
+    .sort((a, b) => {
+      if (b.onlineSessions !== a.onlineSessions) return b.onlineSessions - a.onlineSessions;
+      return Date.parse(b.latestSeenAt || 0) - Date.parse(a.latestSeenAt || 0);
+    });
+
+  const summary = {
+    onlineAccounts: byUser.length,
+    onlineSessions: onlineRows.length,
+    activeSessions,
+    multiLoginAccounts: byUser.filter((item) => Number(item.onlineSessions || 0) > 1).length,
+  };
+
+  return { summary, byUser };
+}
+
+function parseAllowedAiModels(raw) {
+  const allowedPool = new Set(["deepseek-chat", "deepseek-reasoner"]);
+  const list = String(raw || "")
+    .split(",")
+    .map((item) => String(item || "").trim())
+    .filter((item) => item && allowedPool.has(item));
+  const unique = Array.from(new Set(list));
+  return unique.length ? unique : ["deepseek-chat", "deepseek-reasoner"];
+}
+
+function getDefaultAiAdminConfig() {
+  const keyConfigured = Boolean(String(process.env.DEEPSEEK_API_KEY || "").trim());
+  const allowedModels = parseAllowedAiModels(process.env.AI_ALLOWED_MODELS || "deepseek-chat,deepseek-reasoner");
+  const envModelRaw = String(process.env.DEEPSEEK_DEFAULT_MODEL || process.env.DEEPSEEK_MODEL || "deepseek-chat").trim();
+  const defaultModel = allowedModels.includes(envModelRaw) ? envModelRaw : allowedModels[0];
+  return {
+    enabled: String(process.env.AI_ENABLED || "true").toLowerCase() !== "false",
+    configured: keyConfigured,
+    defaultModel,
+    allowedModels,
+    limits: {
+      dailyPerUser: Math.max(0, Number(process.env.AI_LIMIT_USER || 0) || 0),
+      dailyPerDept: Math.max(0, Number(process.env.AI_LIMIT_DEPT || 0) || 0),
+    },
+    updatedBy: "system",
+    updatedAt: "",
+  };
+}
+
+function readAiAdminConfig() {
+  const defaults = getDefaultAiAdminConfig();
+  try {
+    if (!fs.existsSync(AI_ADMIN_CONFIG_FILE)) return defaults;
+    const raw = JSON.parse(fs.readFileSync(AI_ADMIN_CONFIG_FILE, "utf8"));
+    const allowedModels = parseAllowedAiModels(
+      Array.isArray(raw?.allowedModels) ? raw.allowedModels.join(",") : raw?.allowedModels
+    );
+    const defaultModel = allowedModels.includes(String(raw?.defaultModel || ""))
+      ? String(raw.defaultModel)
+      : allowedModels[0];
+    return {
+      enabled: raw?.enabled !== undefined ? !!raw.enabled : defaults.enabled,
+      configured: defaults.configured,
+      defaultModel,
+      allowedModels,
+      limits: {
+        dailyPerUser: Math.max(0, Number(raw?.limits?.dailyPerUser ?? defaults.limits.dailyPerUser) || 0),
+        dailyPerDept: Math.max(0, Number(raw?.limits?.dailyPerDept ?? defaults.limits.dailyPerDept) || 0),
+      },
+      updatedBy: String(raw?.updatedBy || defaults.updatedBy || "system"),
+      updatedAt: String(raw?.updatedAt || defaults.updatedAt || ""),
+    };
+  } catch (_) {
+    return defaults;
+  }
+}
+
+function writeAiAdminConfig(input, actor = "system") {
+  const current = readAiAdminConfig();
+  const nextAllowed = parseAllowedAiModels(
+    Array.isArray(input?.allowedModels) ? input.allowedModels.join(",") : input?.allowedModels || current.allowedModels.join(",")
+  );
+  const nextDefault = nextAllowed.includes(String(input?.defaultModel || ""))
+    ? String(input.defaultModel)
+    : nextAllowed[0];
+  const payload = {
+    enabled: input?.enabled !== undefined ? !!input.enabled : current.enabled,
+    configured: Boolean(String(process.env.DEEPSEEK_API_KEY || "").trim()),
+    defaultModel: nextDefault,
+    allowedModels: nextAllowed,
+    limits: {
+      dailyPerUser: Math.max(0, Number(input?.dailyLimitPerUser ?? current.limits.dailyPerUser) || 0),
+      dailyPerDept: Math.max(0, Number(input?.dailyLimitPerDept ?? current.limits.dailyPerDept) || 0),
+    },
+    updatedBy: String(actor || "system"),
+    updatedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(AI_ADMIN_CONFIG_FILE, JSON.stringify(payload, null, 2), "utf8");
+  return payload;
+}
+
+function appendAiAuditLog(entry) {
+  const row = {
+    ts: new Date().toISOString(),
+    username: String(entry?.username || ""),
+    displayName: String(entry?.displayName || ""),
+    department: String(entry?.department || ""),
+    role: String(entry?.role || ""),
+    action: String(entry?.action || ""),
+    model: String(entry?.model || ""),
+    status: String(entry?.status || "ok"),
+    durationMs: Math.max(0, Number(entry?.durationMs || 0)),
+    inputChars: Math.max(0, Number(entry?.inputChars || 0)),
+    outputChars: Math.max(0, Number(entry?.outputChars || 0)),
+    totalTokens: Math.max(0, Number(entry?.totalTokens || 0)),
+    error: String(entry?.error || ""),
+    ip: String(entry?.ip || ""),
+  };
+  try {
+    fs.appendFileSync(AI_AUDIT_LOG_FILE, `${JSON.stringify(row)}\n`, "utf8");
+  } catch (_) {}
+}
+
+function readAiAuditLog(limit = 120) {
+  const count = Math.max(1, Math.min(500, Number(limit || 120) || 120));
+  try {
+    if (!fs.existsSync(AI_AUDIT_LOG_FILE)) return [];
+    const lines = fs.readFileSync(AI_AUDIT_LOG_FILE, "utf8").split(/\r?\n/).filter(Boolean);
+    const items = [];
+    for (let i = lines.length - 1; i >= 0 && items.length < count; i -= 1) {
+      try {
+        items.push(JSON.parse(lines[i]));
+      } catch (_) {}
+    }
+    return items;
+  } catch (_) {
+    return [];
+  }
 }
 
 function loginAttemptKey(req, username) {
@@ -1252,7 +1506,9 @@ async function handleLogin(req, res) {
 function handleLogout(req, res) {
   const cookies = parseCookies(req);
   if (cookies[SESSION_COOKIE_NAME]) {
-    sessions.delete(cookies[SESSION_COOKIE_NAME]);
+    const token = String(cookies[SESSION_COOKIE_NAME]);
+    sessions.delete(token);
+    onlineSessionStates.delete(token);
   }
   sendJson(res, 200, { ok: true }, { "Set-Cookie": buildSessionCookie("", 0) });
 }
@@ -1532,7 +1788,73 @@ async function handleApi(req, url, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/session") {
-    sendJson(res, 200, { user: getUserFromSession(req) });
+    const user = getUserFromSession(req);
+    if (user) recordOnlineSession(req, user, { active: false });
+    sendJson(res, 200, { user });
+    return true;
+  }
+
+  if (req.method === "POST" && apiPath === "/api/session/heartbeat") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    recordOnlineSession(req, user, { active: false });
+    sendJson(res, 200, { ok: true, ts: new Date().toISOString(), active: false });
+    return true;
+  }
+
+  if (req.method === "POST" && apiPath === "/api/session/activity") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    recordOnlineSession(req, user, { active: true });
+    sendJson(res, 200, { ok: true, ts: new Date().toISOString(), active: true });
+    return true;
+  }
+
+  if (req.method === "GET" && apiPath === "/api/admin/online-sessions") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    if (!isAdmin(user)) {
+      sendJson(res, 403, { error: "Only admin can view online sessions" });
+      return true;
+    }
+    sendJson(res, 200, buildOnlineSessionsPayload());
+    return true;
+  }
+
+  if (req.method === "GET" && apiPath === "/api/admin/ai/config") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    if (!isAdmin(user)) {
+      sendJson(res, 403, { error: "Only admin can access AI config" });
+      return true;
+    }
+    sendJson(res, 200, { config: readAiAdminConfig() });
+    return true;
+  }
+
+  if (req.method === "POST" && apiPath === "/api/admin/ai/config") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    if (!isAdmin(user)) {
+      sendJson(res, 403, { error: "Only admin can update AI config" });
+      return true;
+    }
+    const bodyState = await readJsonBody(req, res);
+    if (!bodyState.ok) return true;
+    const saved = writeAiAdminConfig(bodyState.body || {}, user.username);
+    sendJson(res, 200, { ok: true, config: saved });
+    return true;
+  }
+
+  if (req.method === "GET" && apiPath === "/api/admin/ai/audit") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    if (!isAdmin(user)) {
+      sendJson(res, 403, { error: "Only admin can read AI audit" });
+      return true;
+    }
+    const limit = Number(url.searchParams.get("limit") || 120);
+    sendJson(res, 200, { ok: true, items: readAiAuditLog(limit) });
     return true;
   }
 
@@ -1897,16 +2219,13 @@ async function handleApi(req, url, res) {
   if (req.method === "GET" && apiPath === "/api/ai/config") {
     const user = requireAuth(req, res);
     if (!user) return true;
-    const key = process.env.DEEPSEEK_API_KEY || "";
-    const enabled = process.env.AI_ENABLED !== "false";
-    const defaultModel = process.env.DEEPSEEK_DEFAULT_MODEL || "deepseek-chat";
-    const allowedModels = ["deepseek-chat", "deepseek-reasoner"];
+    const cfg = readAiAdminConfig();
     sendJson(res, 200, {
       config: {
-        enabled,
-        configured: !!key,
-        defaultModel,
-        allowedModels,
+        enabled: !!cfg.enabled,
+        configured: !!cfg.configured,
+        defaultModel: cfg.defaultModel,
+        allowedModels: cfg.allowedModels,
         limits: { remainingByUser: null, remainingByDept: null },
       },
     });
@@ -1916,6 +2235,7 @@ async function handleApi(req, url, res) {
   if (req.method === "POST" && apiPath === "/api/ai/document-assist") {
     const user = requireAuth(req, res);
     if (!user) return true;
+    const startedAt = Date.now();
     const key = process.env.DEEPSEEK_API_KEY || "";
     if (!key) {
       sendJson(res, 503, { error: "DeepSeek API Key 未配置，请联系管理员在服务器环境变量中设置 DEEPSEEK_API_KEY" });
@@ -1923,14 +2243,25 @@ async function handleApi(req, url, res) {
     }
     const bodyState = await readJsonBody(req, res);
     if (!bodyState.ok) return true;
-    const { action, model, instruction, text, title, docNo, department } = bodyState.body;
+    const { action, task, model, instruction, text, title, docNo, department } = bodyState.body;
+    const nextAction = String(action || task || "review").trim().toLowerCase() === "write" ? "write" : "review";
+    const settings = readAiAdminConfig();
+    if (!settings.enabled) {
+      sendJson(res, 403, { error: "AI 助手当前已关闭，请联系管理员开启。" });
+      return true;
+    }
     if (!text || String(text).length < 20) {
       sendJson(res, 400, { error: "正文内容不足，请先抓取或粘贴文档正文" });
       return true;
     }
-    const safeModel = ["deepseek-chat", "deepseek-reasoner"].includes(model) ? model : "deepseek-chat";
+    const requestedModel = String(model || "").trim();
+    const safeModel = settings.allowedModels.includes(requestedModel)
+      ? requestedModel
+      : settings.allowedModels.includes(settings.defaultModel)
+        ? settings.defaultModel
+        : "deepseek-chat";
     let systemPrompt, userPrompt;
-    if (action === "review") {
+    if (nextAction === "review") {
       systemPrompt = "你是一位专业的SOP（标准作业程序）审阅专家，擅长发现流程文件中的高风险缺陷、逻辑漏洞和改进空间。请用中文回应，以结构化方式列出问题和建议。";
       userPrompt = `请对以下SOP文件进行专业审阅，指出主要问题和改进建议。\n\n文件标题：${title || "未知"}\n文号：${docNo || "无"}\n部门：${department || "未知"}\n\n${instruction ? `用户特别要求：${instruction}\n\n` : ""}正文内容：\n${text}`;
     } else {
@@ -1979,8 +2310,37 @@ async function handleApi(req, url, res) {
         reqAi.end();
       });
       const content = result?.choices?.[0]?.message?.content || "";
+      appendAiAuditLog({
+        username: user.username,
+        displayName: user.displayName,
+        department: user.department,
+        role: user.role,
+        action: nextAction,
+        model: safeModel,
+        status: "ok",
+        durationMs: Date.now() - startedAt,
+        inputChars: String(text || "").length,
+        outputChars: String(content || "").length,
+        totalTokens: Number(result?.usage?.total_tokens || 0),
+        ip: getClientIp(req),
+      });
       sendJson(res, 200, { content, model: safeModel });
     } catch (err) {
+      appendAiAuditLog({
+        username: user.username,
+        displayName: user.displayName,
+        department: user.department,
+        role: user.role,
+        action: nextAction,
+        model: safeModel,
+        status: "error",
+        durationMs: Date.now() - startedAt,
+        inputChars: String(text || "").length,
+        outputChars: 0,
+        totalTokens: 0,
+        error: String(err?.message || err || ""),
+        ip: getClientIp(req),
+      });
       sendJson(res, 502, { error: err.message || "DeepSeek API 调用失败" });
     }
     return true;

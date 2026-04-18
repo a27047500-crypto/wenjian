@@ -5058,17 +5058,208 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         })();
 
         window.closeDraftModal = () => document.getElementById('draft-modal').classList.add('hidden');
-
-        // AI 助手窗口集成
+        // AI 助手窗口集成（悬浮模式）
         (function() {
-            let aiWindow = null;
+            let aiPanel = null;
+            let aiFrame = null;
+            const AI_PANEL_MIN_WIDTH = 460;
+            const AI_PANEL_MIN_HEIGHT = 340;
+            const AI_PANEL_STATE_KEY = 'sop_ai_assist_panel_v2';
+            const AI_ASSIST_UI_VERSION = '20260418-32';
+
+            function saveAiPanelState() {
+                if (!aiPanel) return;
+                const rect = aiPanel.getBoundingClientRect();
+                const state = {
+                    left: Math.round(rect.left),
+                    top: Math.round(rect.top),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                };
+                try { localStorage.setItem(AI_PANEL_STATE_KEY, JSON.stringify(state)); } catch (_) {}
+            }
+
+            function loadAiPanelState() {
+                try {
+                    return JSON.parse(localStorage.getItem(AI_PANEL_STATE_KEY) || '{}') || {};
+                } catch (_) {
+                    return {};
+                }
+            }
+
+            function ensureAiAssistPanel() {
+                if (aiPanel) return aiPanel;
+
+                aiPanel = document.createElement('div');
+                aiPanel.id = 'sop-ai-assist-panel';
+                aiPanel.style.cssText = [
+                    'position:fixed',
+                    'right:24px',
+                    'bottom:24px',
+                    'width:min(760px, calc(100vw - 32px))',
+                    'height:min(620px, calc(100vh - 36px))',
+                    `min-width:${AI_PANEL_MIN_WIDTH}px`,
+                    `min-height:${AI_PANEL_MIN_HEIGHT}px`,
+                    'max-width:calc(100vw - 12px)',
+                    'max-height:calc(100vh - 12px)',
+                    'background:#fff',
+                    'border:1px solid #cbd5e1',
+                    'border-radius:14px',
+                    'box-shadow:0 18px 50px rgba(15,23,42,0.28)',
+                    'z-index:9999',
+                    'overflow:hidden',
+                    'display:flex',
+                    'flex-direction:column'
+                ].join(';');
+
+                const header = document.createElement('div');
+                header.style.cssText = 'height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:#1e3a5f;color:#fff;cursor:move;user-select:none;font-size:13px;font-weight:600;';
+                header.innerHTML = '<span>AI 助手</span><div style="display:flex;align-items:center;gap:8px;"><button id="sop-ai-assist-reset" style="border:0;background:rgba(255,255,255,.16);color:#fff;border-radius:8px;padding:4px 10px;cursor:pointer;">默认大小</button><button id="sop-ai-assist-close" style="border:0;background:rgba(255,255,255,.16);color:#fff;border-radius:8px;padding:4px 10px;cursor:pointer;">关闭</button></div>';
+
+                aiFrame = document.createElement('iframe');
+                aiFrame.src = `/ai-assist.html?embed=1&v=${AI_ASSIST_UI_VERSION}`;
+                aiFrame.style.cssText = 'width:100%;height:calc(100% - 44px);border:0;background:#fff;';
+
+                const resizeGrip = document.createElement('div');
+                resizeGrip.id = 'sop-ai-assist-resize';
+                resizeGrip.title = '拖动调整窗口大小';
+                resizeGrip.style.cssText = [
+                    'position:absolute',
+                    'right:5px',
+                    'bottom:5px',
+                    'width:16px',
+                    'height:16px',
+                    'cursor:nwse-resize',
+                    'border-right:2px solid rgba(15,23,42,.35)',
+                    'border-bottom:2px solid rgba(15,23,42,.35)',
+                    'border-radius:2px',
+                    'z-index:10',
+                    'opacity:.85'
+                ].join(';');
+
+                aiPanel.appendChild(header);
+                aiPanel.appendChild(aiFrame);
+                aiPanel.appendChild(resizeGrip);
+                document.body.appendChild(aiPanel);
+
+                const closeBtn = header.querySelector('#sop-ai-assist-close');
+                closeBtn.addEventListener('click', () => { aiPanel.style.display = 'none'; });
+                const resetBtn = header.querySelector('#sop-ai-assist-reset');
+                resetBtn.addEventListener('click', () => {
+                    aiPanel.style.width = 'min(760px, calc(100vw - 32px))';
+                    aiPanel.style.height = 'min(620px, calc(100vh - 36px))';
+                    aiPanel.style.right = '24px';
+                    aiPanel.style.bottom = '24px';
+                    aiPanel.style.left = 'auto';
+                    aiPanel.style.top = 'auto';
+                    saveAiPanelState();
+                });
+
+                // draggable
+                let dragging = false;
+                let startX = 0;
+                let startY = 0;
+                let startLeft = 0;
+                let startTop = 0;
+                let resizing = false;
+                let resizeStartX = 0;
+                let resizeStartY = 0;
+                let resizeStartW = 0;
+                let resizeStartH = 0;
+
+                const onMove = (ev) => {
+                    if (!dragging) return;
+                    const dx = ev.clientX - startX;
+                    const dy = ev.clientY - startY;
+                    const nextLeft = Math.max(8, Math.min(window.innerWidth - aiPanel.offsetWidth - 8, startLeft + dx));
+                    const nextTop = Math.max(8, Math.min(window.innerHeight - aiPanel.offsetHeight - 8, startTop + dy));
+                    aiPanel.style.left = `${nextLeft}px`;
+                    aiPanel.style.top = `${nextTop}px`;
+                    aiPanel.style.right = 'auto';
+                    aiPanel.style.bottom = 'auto';
+                };
+
+                const onUp = () => {
+                    dragging = false;
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                    saveAiPanelState();
+                };
+
+                header.addEventListener('mousedown', (ev) => {
+                    if (ev.target && ev.target.id === 'sop-ai-assist-close') return;
+                    if (ev.target && ev.target.id === 'sop-ai-assist-reset') return;
+                    const rect = aiPanel.getBoundingClientRect();
+                    dragging = true;
+                    startX = ev.clientX;
+                    startY = ev.clientY;
+                    startLeft = rect.left;
+                    startTop = rect.top;
+                    aiPanel.style.left = `${rect.left}px`;
+                    aiPanel.style.top = `${rect.top}px`;
+                    aiPanel.style.right = 'auto';
+                    aiPanel.style.bottom = 'auto';
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                });
+
+                const onResizeMove = (ev) => {
+                    if (!resizing) return;
+                    const dx = ev.clientX - resizeStartX;
+                    const dy = ev.clientY - resizeStartY;
+                    const maxWidth = Math.max(AI_PANEL_MIN_WIDTH, window.innerWidth - 12);
+                    const maxHeight = Math.max(AI_PANEL_MIN_HEIGHT, window.innerHeight - 12);
+                    const width = Math.max(AI_PANEL_MIN_WIDTH, Math.min(maxWidth, resizeStartW + dx));
+                    const height = Math.max(AI_PANEL_MIN_HEIGHT, Math.min(maxHeight, resizeStartH + dy));
+                    aiPanel.style.width = `${Math.round(width)}px`;
+                    aiPanel.style.height = `${Math.round(height)}px`;
+                };
+
+                const onResizeUp = () => {
+                    resizing = false;
+                    document.removeEventListener('mousemove', onResizeMove);
+                    document.removeEventListener('mouseup', onResizeUp);
+                    saveAiPanelState();
+                };
+
+                resizeGrip.addEventListener('mousedown', (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    const rect = aiPanel.getBoundingClientRect();
+                    resizing = true;
+                    resizeStartX = ev.clientX;
+                    resizeStartY = ev.clientY;
+                    resizeStartW = rect.width;
+                    resizeStartH = rect.height;
+                    aiPanel.style.left = `${rect.left}px`;
+                    aiPanel.style.top = `${rect.top}px`;
+                    aiPanel.style.right = 'auto';
+                    aiPanel.style.bottom = 'auto';
+                    document.addEventListener('mousemove', onResizeMove);
+                    document.addEventListener('mouseup', onResizeUp);
+                });
+
+                const savedState = loadAiPanelState();
+                if (savedState && Number.isFinite(savedState.width) && Number.isFinite(savedState.height)) {
+                    aiPanel.style.width = `${Math.max(AI_PANEL_MIN_WIDTH, Math.round(savedState.width))}px`;
+                    aiPanel.style.height = `${Math.max(AI_PANEL_MIN_HEIGHT, Math.round(savedState.height))}px`;
+                }
+                if (savedState && Number.isFinite(savedState.left) && Number.isFinite(savedState.top)) {
+                    const left = Math.max(8, Math.min(window.innerWidth - aiPanel.offsetWidth - 8, Math.round(savedState.left)));
+                    const top = Math.max(8, Math.min(window.innerHeight - aiPanel.offsetHeight - 8, Math.round(savedState.top)));
+                    aiPanel.style.left = `${left}px`;
+                    aiPanel.style.top = `${top}px`;
+                    aiPanel.style.right = 'auto';
+                    aiPanel.style.bottom = 'auto';
+                }
+
+                return aiPanel;
+            }
 
             window.openAiAssist = function() {
-                if (aiWindow && !aiWindow.closed) {
-                    aiWindow.focus();
-                } else {
-                    aiWindow = window.open('/ai-assist.html', 'sop-ai-assist', 'width=960,height=720,resizable=yes,scrollbars=yes');
-                }
+                const panel = ensureAiAssistPanel();
+                panel.style.display = 'flex';
+                try { aiFrame && aiFrame.contentWindow && aiFrame.contentWindow.focus(); } catch (_) {}
             };
 
             window.addEventListener('message', function(event) {
@@ -5079,12 +5270,37 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                     const titleEl = wrapper ? wrapper.querySelector('[data-field="title"], .doc-title, h1') : null;
                     const docNoEl = wrapper ? wrapper.querySelector('[data-field="docNo"], .doc-no') : null;
                     const deptEl = wrapper ? wrapper.querySelector('[data-field="department"], .doc-dept') : null;
+                    let cleanText = '';
+                    if (wrapper) {
+                        const clone = wrapper.cloneNode(true);
+                        clone.querySelectorAll([
+                            '.no-print',
+                            '.block-toolbar',
+                            '.table-controls',
+                            '.sipoc-action-bar',
+                            '.delete-btn-wrapper',
+                            '.action-overlay',
+                            '.action-buttons',
+                            '.resize-handle',
+                            '.move-handle',
+                            '.rotate-handle',
+                            '.delete-handle',
+                            '.gallery-zone-resize',
+                            '.slot-actions',
+                            '.slot-resize',
+                            'button'
+                        ].join(',')).forEach((el) => el.remove());
+                        cleanText = String(clone.innerText || '')
+                            .replace(/[ \t]{2,}/g, ' ')
+                            .replace(/\n{3,}/g, '\n\n')
+                            .trim();
+                    }
                     const snapshot = {
                         title: titleEl ? titleEl.innerText.trim() : (document.title || ''),
                         docNo: docNoEl ? docNoEl.innerText.trim() : '',
                         department: deptEl ? deptEl.innerText.trim() : '',
                         templateKey: document.body.dataset.templateKey || '',
-                        text: wrapper ? wrapper.innerText.trim() : '',
+                        text: cleanText,
                     };
                     try {
                         event.source.postMessage({ type: 'sop-ai-snapshot', payload: snapshot }, '*');
@@ -5113,7 +5329,9 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 }
             });
         })();
+
     </script>
 
 </body></html>
+
 

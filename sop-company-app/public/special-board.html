@@ -1217,7 +1217,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
     };
 
     const app = {
-        data: { currentDept: null, depts: [], arch: [], overviewNotes: { depts: '', modules: '', flows: '', sipoc: '', drafting: '', final: '', published: '' }, plans: [], deptOrg: {} },
+        data: { currentDept: null, depts: [], arch: [], overviewNotes: { depts: '', modules: '', flows: '', sipoc: '', drafting: '', final: '', published: '' }, plans: [], deptOrg: {}, reportConfig: { hiddenDepts: [] } },
         deletedStack: [],
         currentOverviewTab: 'depts', 
         currentPlanMonth: formatLocalDate(new Date()).slice(0, 7), 
@@ -1231,6 +1231,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             depts: ["供应链ISC", "研发IPD", "销售IPMS"],
             overviewNotes: { depts: '', modules: '', flows: '', sipoc: '', drafting: '', final: '', published: '' },
             plans: [],
+            reportConfig: { hiddenDepts: [] },
             arch: [
                 { id: 1700001, dept: "供应链ISC", l1: "主计划", level: "L1", archDate: "2026-02-04", subs: [
                     { id: 1, l2: "制定MPS计划", level: "L3", status: "梳理中", progress: 45, dateId: "2026-02-05", sipoc: {}, todos: [] },
@@ -1249,6 +1250,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                     this.data.overviewNotes = snap.notes || { depts: '', modules: '', flows: '', sipoc: '', drafting: '', final: '', published: '' };
                     this.data.plans = Array.isArray(snap.plans) ? snap.plans : [];
                     this.data.deptOrg = snap.deptOrg || {};
+                    this.data.reportConfig = snap.reportConfig || { hiddenDepts: [] };
                     // 快照数据写入本地 IndexedDB 以便后续编辑持久化
                     try { await this.save(); } catch(e) {}
                     delete window.__BPM_SNAPSHOT_DATA__;
@@ -1256,13 +1258,14 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                     const params = new URLSearchParams(window.location.search || '');
                     const allowLocalBootstrap = params.get('local') === '1';
                     if (allowLocalBootstrap) {
-                        const saved = await idb.getMany(['bpm_depts', 'bpm_arch', 'bpm_notes', 'bpm_plans', 'bpm_deptOrg']);
+                        const saved = await idb.getMany(['bpm_depts', 'bpm_arch', 'bpm_notes', 'bpm_plans', 'bpm_deptOrg', 'bpm_reportConfig']);
                         if (saved.bpm_depts && saved.bpm_arch) {
                             this.data.depts = Array.isArray(saved.bpm_depts) ? saved.bpm_depts : [];
                             this.data.arch = Array.isArray(saved.bpm_arch) ? saved.bpm_arch : [];
                             this.data.overviewNotes = saved.bpm_notes || { depts: '', modules: '', flows: '', sipoc: '', drafting: '', final: '', published: '' };
                             this.data.plans = Array.isArray(saved.bpm_plans) ? saved.bpm_plans : [];
                             this.data.deptOrg = saved.bpm_deptOrg || {};
+                            this.data.reportConfig = saved.bpm_reportConfig || { hiddenDepts: [] };
                         } else {
                             this.loadEmpty();
                         }
@@ -1279,6 +1282,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             if (!this.data.overviewNotes) this.data.overviewNotes = { depts: '', modules: '', flows: '', sipoc: '', drafting: '', final: '', published: '' };
             if (!this.data.plans) this.data.plans = [];
             if (!this.data.deptOrg) this.data.deptOrg = {};
+            if (!this.data.reportConfig) this.data.reportConfig = { hiddenDepts: [] };
             
             this.currentDept = this.data.depts[0] || null; 
             this.renderNav();
@@ -1291,6 +1295,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             this.data.arch = JSON.parse(JSON.stringify(this.defaultData.arch)); 
             this.data.overviewNotes = { ...this.defaultData.overviewNotes };
             this.data.plans = [];
+            this.data.reportConfig = { hiddenDepts: [] };
         },
 
         loadEmpty() {
@@ -1299,6 +1304,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             this.data.overviewNotes = { depts: '', modules: '', flows: '', sipoc: '', drafting: '', final: '', published: '' };
             this.data.plans = [];
             this.data.deptOrg = {};
+            this.data.reportConfig = { hiddenDepts: [] };
         },
         
         async save() { 
@@ -1308,7 +1314,8 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                     ['bpm_arch', this.data.arch],
                     ['bpm_notes', this.data.overviewNotes],
                     ['bpm_plans', this.data.plans],
-                    ['bpm_deptOrg', this.data.deptOrg]
+                    ['bpm_deptOrg', this.data.deptOrg],
+                    ['bpm_reportConfig', this.data.reportConfig]
                 ]);
             } catch (e) {
                 console.error("Save error:", e);
@@ -1342,7 +1349,8 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                     arch: this.data.arch,
                     notes: this.data.overviewNotes,
                     plans: this.data.plans,
-                    deptOrg: this.data.deptOrg
+                    deptOrg: this.data.deptOrg,
+                    reportConfig: this.data.reportConfig
                 });
                 const dataScript = document.createElement('script');
                 dataScript.textContent = `window.__BPM_SNAPSHOT_DATA__ = ${snapshotData};`;
@@ -2459,11 +2467,72 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             } catch(e) { console.error(e); }
         },
 
+        getOverviewReportConfig() {
+            const allDepts = Array.isArray(this.data.depts) ? this.data.depts : [];
+            const rawHidden = Array.isArray(this.data?.reportConfig?.hiddenDepts) ? this.data.reportConfig.hiddenDepts : [];
+            const hiddenDepts = [...new Set(rawHidden.map(v => String(v || '').trim()).filter(Boolean))]
+                .filter(d => allDepts.includes(d));
+            this.data.reportConfig = { hiddenDepts };
+            return this.data.reportConfig;
+        },
+
+        getOverviewHiddenDeptSet() {
+            return new Set(this.getOverviewReportConfig().hiddenDepts || []);
+        },
+
+        getOverviewVisibleDepts() {
+            const allDepts = Array.isArray(this.data.depts) ? this.data.depts : [];
+            const hiddenSet = this.getOverviewHiddenDeptSet();
+            return allDepts.filter(dept => !hiddenSet.has(dept));
+        },
+
+        canManageOverviewReportConfig() {
+            const user = this.sessionUser || window.__specialSessionUser || null;
+            return String(user?.role || '').toLowerCase() === 'admin';
+        },
+
+        async toggleOverviewDeptVisibility(deptName, visible) {
+            const dept = String(deptName || '').trim();
+            if (!dept) return;
+            if (!Array.isArray(this.data.depts) || !this.data.depts.includes(dept)) return;
+            const cfg = this.getOverviewReportConfig();
+            const hidden = new Set(cfg.hiddenDepts || []);
+            if (visible) hidden.delete(dept);
+            else hidden.add(dept);
+            this.data.reportConfig = { hiddenDepts: [...hidden] };
+            try {
+                await this.save();
+                this.renderOverview();
+                showToast('总览展示范围已更新');
+            } catch (e) {
+                console.error(e);
+                showToast('保存总览展示范围失败', 'error');
+            }
+        },
+
+        async showAllOverviewDepts() {
+            this.data.reportConfig = { hiddenDepts: [] };
+            try {
+                await this.save();
+                this.renderOverview();
+                showToast('已设置为展示全部部门');
+            } catch (e) {
+                console.error(e);
+                showToast('保存总览展示范围失败', 'error');
+            }
+        },
+
         renderOverview() {
             try {
                 const container = document.getElementById('mainContent');
-                
-                let totalDepts = Array.isArray(this.data.depts) ? this.data.depts.length : 0; 
+
+                const allDepts = Array.isArray(this.data.depts) ? this.data.depts : [];
+                const hiddenDeptSet = this.getOverviewHiddenDeptSet();
+                const visibleDepts = this.getOverviewVisibleDepts();
+                const hiddenDeptCount = Math.max(0, allDepts.length - visibleDepts.length);
+                const canManageReportConfig = this.canManageOverviewReportConfig();
+
+                let totalDepts = visibleDepts.length;
                 let totalModules = 0;
                 let totalFlows = 0, sipocDone = 0, docsDrafting = 0, docsFinal = 0, docsPublished = 0;
 
@@ -2471,13 +2540,14 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 const currentYear = today.getFullYear();
                 const currentMonth = today.getMonth();
 
-                const deptStats = Array.isArray(this.data.depts) ? this.data.depts.map(d => ({ name: d, modules: 0, flows: 0, sipoc: 0, drafting: 0, final: 0, published: 0, l1: 0, l2: 0, l3: 0, l4: 0 })) : [];
+                const deptStats = visibleDepts.map(d => ({ name: d, modules: 0, flows: 0, sipoc: 0, drafting: 0, final: 0, published: 0, l1: 0, l2: 0, l3: 0, l4: 0 }));
                 const calEvents = [];
                 let allTodos = [];
                 const monthNames = ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"];
 
                 if(Array.isArray(this.data.arch)) {
                     this.data.arch.forEach(m => {
+                        if (!visibleDepts.includes(m.dept)) return;
                         const dStat = deptStats.find(d => d.name === m.dept);
                         if (dStat) {
                             dStat.modules++;
@@ -2583,7 +2653,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 
                 const groupDataByDept = (filterFn, mapFn) => {
                     let html = '';
-                    this.data.depts.forEach(dept => {
+                    visibleDepts.forEach(dept => {
                         let items = [];
                         this.data.arch.filter(m => m.dept === dept).forEach(m => {
                             if (filterFn(m, null)) items.push(mapFn(m, null));
@@ -2598,7 +2668,11 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
 
                 if (this.currentOverviewTab === 'depts') {
                     chartTitle = `部门覆盖全景`;
-                    detailListHtml = `<div class="dl-group"><div class="dl-dept-name">已接入部门清单</div>` + this.data.depts.map(d => `<div class="dl-item" onclick="app.selectDept('${escapeJSStr(d)}')"><span style="font-weight:600; color:var(--primary);">${escapeHTML(d)}</span><span class="dl-badge">进入架构看板</span></div>`).join('') + `</div>`;
+                    detailListHtml = `<div class="dl-group"><div class="dl-dept-name">已接入部门清单</div>` +
+                        (visibleDepts.length
+                            ? visibleDepts.map(d => `<div class="dl-item" onclick="app.selectDept('${escapeJSStr(d)}')"><span style="font-weight:600; color:var(--primary);">${escapeHTML(d)}</span><span class="dl-badge">进入架构看板</span></div>`).join('')
+                            : `<div class="dl-item"><span style="color:#94a3b8;">当前无可展示部门</span></div>`) +
+                        `</div>`;
                 } 
                 else if (this.currentOverviewTab === 'modules') {
                     chartTitle = `架构模块分布`;
@@ -2649,18 +2723,40 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 let panelChartContent = `<canvas id="detailChart"></canvas>`;
                 if (this.currentOverviewTab === 'depts') {
                     const colors = ['#2563eb', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899', '#f97316', '#475569'];
-                    const tags = this.data.depts.map((d, i) => {
+                    const tags = visibleDepts.map((d, i) => {
                         const sizes = [14, 18, 16, 22, 15, 20];
                         const size = sizes[i % sizes.length]; 
                         const color = colors[i % colors.length];
                         return `<span style="font-size:${size}px; font-weight:800; color:${color}; padding:8px 16px; margin:6px; background:${color}15; border:1px solid ${color}30; border-radius:30px; transition:0.3s; cursor:pointer; display:inline-block;" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'" onclick="app.selectDept('${escapeJSStr(d)}')">${escapeHTML(d)}</span>`;
                     }).join('');
-                    panelChartContent = `<div style="display:flex; flex-wrap:wrap; align-content:center; justify-content:center; width:100%; height:100%; padding:20px; box-sizing:border-box;">${tags}</div>`;
+                    panelChartContent = `<div style="display:flex; flex-wrap:wrap; align-content:center; justify-content:center; width:100%; height:100%; padding:20px; box-sizing:border-box;">${tags || '<span style="color:#94a3b8;">暂无可展示部门</span>'}</div>`;
                 }
+
+                const overviewScopePanelHtml = canManageReportConfig ? `
+                    <div style="background:#fff; border:1px solid var(--border); border-radius:12px; padding:14px 16px; margin: 6px 0 14px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+                            <div style="font-size:13px; font-weight:700; color:#0f172a;">总览展示部门设置</div>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="font-size:12px; color:#64748b;">已隐藏 ${hiddenDeptCount} 个部门</span>
+                                <button class="btn btn-outline btn-small" onclick="app.showAllOverviewDepts()">全部显示</button>
+                            </div>
+                        </div>
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px;">
+                            ${allDepts.map((dept) => `
+                                <label style="display:flex; align-items:center; gap:8px; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; background:#f8fafc;">
+                                    <input type="checkbox" ${hiddenDeptSet.has(dept) ? '' : 'checked'} onchange="app.toggleOverviewDeptVisibility('${escapeJSStr(dept)}', this.checked)">
+                                    <span style="font-size:12px; color:#334155; line-height:1.3;">${escapeHTML(dept)}</span>
+                                </label>
+                            `).join('')}
+                        </div>
+                        <div style="margin-top:8px; font-size:11px; color:#94a3b8;">说明：这里的设置仅影响「总览报告」中的统计、图表和明细展示，不会删除部门真实数据。</div>
+                    </div>
+                ` : '';
 
                 // 严守左右分栏经典布局
                 const detailPanelHtml = `
                     <div class="overview-detail-panel">
+                        ${overviewScopePanelHtml}
                         <div class="detail-section-title">数据穿透明细 — ${chartTitle}</div>
                         <div class="panel-stack-layout">
                             <div class="scrollable-chart-wrapper">
@@ -2736,8 +2832,8 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 });
 
                 let deptTodosHtml = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 20px; margin-bottom: 30px;">';
-                if(Array.isArray(this.data.depts)) {
-                    this.data.depts.forEach(deptName => {
+                if(Array.isArray(visibleDepts)) {
+                    visibleDepts.forEach(deptName => {
                         const deptTodos = allTodos.filter(t => t.dept === deptName);
                         const pendingCount = deptTodos.filter(t => !t.done).length;
                         let tableHtml = '';
@@ -3337,7 +3433,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
 
 
 <script src="/presence.js?v=20260418-2"></script>
-<script src="/special-bridge.js?v=20260418-29"></script>
+<script src="/special-bridge.js?v=20260418-34"></script>
 </body>
 </html>
 

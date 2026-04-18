@@ -186,6 +186,11 @@
   const SNAPSHOT_REQ = 'sop-ai-request-snapshot';
   const SNAPSHOT_RES = 'sop-ai-snapshot';
   const INSERT_TYPE = 'sop-ai-insert-text';
+  function getBridgeWindow() {
+    if (window.parent && window.parent !== window) return window.parent;
+    if (window.opener && !window.opener.closed) return window.opener;
+    return null;
+  }
 
   // ── DOM refs ───────────────────────────────────────────────────────────────
   const $messages = document.getElementById('messages');
@@ -320,11 +325,12 @@
     const bubble = btn.closest('.msg-body').querySelector('.bubble');
     const text = bubble._rawText || bubble.innerText || '';
     if (!text) return;
-    if (!window.opener || window.opener.closed) {
+    const bridge = getBridgeWindow();
+    if (!bridge) {
       addMessage('system', '未检测到编辑器窗口，请从编辑器打开此窗口');
       return;
     }
-    window.opener.postMessage({ type: INSERT_TYPE, payload: { text } }, '*');
+    bridge.postMessage({ type: INSERT_TYPE, payload: { text } }, '*');
     btn.textContent = '已发送';
     setTimeout(() => { btn.textContent = '插入到编辑器'; }, 1500);
   }
@@ -416,11 +422,12 @@
 
   // ── Grab document ──────────────────────────────────────────────────────────
   function grabDoc() {
-    if (!window.opener || window.opener.closed) {
+    const bridge = getBridgeWindow();
+    if (!bridge) {
       addMessage('system', '未检测到编辑器窗口，请从编辑器工具栏点击「AI 助手」打开此窗口');
       return;
     }
-    window.opener.postMessage({ type: SNAPSHOT_REQ }, '*');
+    bridge.postMessage({ type: SNAPSHOT_REQ }, '*');
     addMessage('system', '正在从编辑器抓取文档...');
   }
 
@@ -613,7 +620,7 @@
     } catch (_) {}
 
     // Auto-grab if opened from editor
-    if (window.opener && !window.opener.closed) {
+    if (getBridgeWindow()) {
       setTimeout(grabDoc, 300);
     }
   }

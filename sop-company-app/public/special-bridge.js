@@ -4,10 +4,10 @@
   const REMOTE_META_ENDPOINT = '/api/special-board/meta';
   const REMOTE_STREAM_ENDPOINT = '/api/special-board/stream';
   const SESSION_ENDPOINT = '/api/session';
-  const SPECIAL_BOARD_VERSION = '20260418-29';
+  const SPECIAL_BOARD_VERSION = '20260418-34';
   const SPECIAL_BOARD_CACHE_CLEANUP_KEY = 'special_board_cache_cleanup_v1';
-  const POLL_INTERVAL_MS = 1200;
-  const AUTO_SAVE_DEBOUNCE_MS = 1800;
+  const POLL_INTERVAL_MS = 600;
+  const AUTO_SAVE_DEBOUNCE_MS = 600;
   const REMOTE_FULL_FETCH_TIMEOUT_MS = 120000;
   const INITIAL_SYNC_FETCH_TIMEOUT_MS = 120000;
   const UNSYNCED_BACKUP_KEY = 'special_board_unsynced_backup_v1';
@@ -53,6 +53,21 @@
     }
   }
 
+  async function gzipTextPayload(rawText) {
+    if (!rawText || typeof CompressionStream !== 'function') return null;
+    try {
+      const encoder = new TextEncoder();
+      const stream = new CompressionStream('gzip');
+      const writer = stream.writable.getWriter();
+      await writer.write(encoder.encode(rawText));
+      await writer.close();
+      const response = new Response(stream.readable);
+      return await response.arrayBuffer();
+    } catch (_) {
+      return null;
+    }
+  }
+
   async function clearLegacyClientCachesForBoard() {
     try {
       if (localStorage.getItem(SPECIAL_BOARD_CACHE_CLEANUP_KEY) === '1') return;
@@ -94,6 +109,7 @@
     const result = await fetchJson(SESSION_ENDPOINT, { method: 'GET' }, 8000);
     if (result.ok && result.data && result.data.user) {
       currentSessionUser = result.data.user;
+      window.__specialSessionUser = currentSessionUser;
       return true;
     }
     setSyncStatus('未登录，正在跳转登录页');
@@ -317,12 +333,17 @@
 
   function normalizeData(raw) {
     const data = raw && typeof raw === 'object' ? raw : {};
+    const allDepts = Array.isArray(data.depts) ? data.depts.map((v) => String(v || '').trim()).filter(Boolean) : [];
+    const hiddenDeptsRaw = Array.isArray(data?.reportConfig?.hiddenDepts) ? data.reportConfig.hiddenDepts : [];
+    const hiddenDepts = [...new Set(hiddenDeptsRaw.map((v) => String(v || '').trim()).filter(Boolean))]
+      .filter((dept) => !allDepts.length || allDepts.includes(dept));
     return {
-      depts: Array.isArray(data.depts) ? data.depts : [],
+      depts: allDepts,
       arch: Array.isArray(data.arch) ? data.arch : [],
       notes: data.notes && typeof data.notes === 'object' ? data.notes : { depts: '', modules: '', flows: '', sipoc: '', drafting: '', final: '', published: '' },
       plans: Array.isArray(data.plans) ? data.plans : [],
       deptOrg: data.deptOrg && typeof data.deptOrg === 'object' ? data.deptOrg : {},
+      reportConfig: { hiddenDepts },
     };
   }
 
@@ -344,7 +365,8 @@
       Array.isArray(remote.depts) ||
       Array.isArray(remote.arch) ||
       (remote.notes && typeof remote.notes === 'object') ||
-      (remote.deptOrg && typeof remote.deptOrg === 'object')
+      (remote.deptOrg && typeof remote.deptOrg === 'object') ||
+      (remote.reportConfig && typeof remote.reportConfig === 'object')
     ) {
       return remote;
     }
@@ -355,7 +377,8 @@
       Array.isArray(level1.depts) ||
       Array.isArray(level1.arch) ||
       (level1.notes && typeof level1.notes === 'object') ||
-      (level1.deptOrg && typeof level1.deptOrg === 'object')
+      (level1.deptOrg && typeof level1.deptOrg === 'object') ||
+      (level1.reportConfig && typeof level1.reportConfig === 'object')
     ) {
       return level1;
     }
@@ -366,7 +389,8 @@
       Array.isArray(level2.depts) ||
       Array.isArray(level2.arch) ||
       (level2.notes && typeof level2.notes === 'object') ||
-      (level2.deptOrg && typeof level2.deptOrg === 'object')
+      (level2.deptOrg && typeof level2.deptOrg === 'object') ||
+      (level2.reportConfig && typeof level2.reportConfig === 'object')
     ) {
       return level2;
     }
@@ -383,6 +407,11 @@
         : { depts: '', modules: '', flows: '', sipoc: '', drafting: '', final: '', published: '' },
       plans: Array.isArray(app.data?.plans) ? app.data.plans : [],
       deptOrg: app.data?.deptOrg && typeof app.data.deptOrg === 'object' ? app.data.deptOrg : {},
+      reportConfig: {
+        hiddenDepts: [...new Set((Array.isArray(app.data?.reportConfig?.hiddenDepts) ? app.data.reportConfig.hiddenDepts : [])
+          .map((v) => String(v || '').trim())
+          .filter(Boolean))],
+      },
     };
   }
 
@@ -506,6 +535,15 @@
         };
       }
       return { ok: res.ok, status: res.status, data, parseError: false };
+    } catch (err) {
+      const timedOut = err && (err.name === 'AbortError' || /abort|timeout/i.test(String(err.message || '')));
+      return {
+        ok: false,
+        status: timedOut ? 408 : 0,
+        parseError: false,
+        networkError: true,
+        data: { error: timedOut ? '请求超时' : ((err && err.message) || '网络请求失败') },
+      };
     } finally {
       clearTimeout(timer);
     }
@@ -551,6 +589,7 @@
       app.data.overviewNotes = normalized.notes;
       app.data.plans = normalized.plans;
       app.data.deptOrg = normalized.deptOrg;
+      app.data.reportConfig = normalized.reportConfig;
       refreshView(app);
     } finally {
       suppressDirtyWatch = false;
@@ -776,6 +815,7 @@
   async function bootstrapBridge(app) {
     if (bridgeReady || !app) return;
     bridgeReady = true;
+    app.sessionUser = currentSessionUser;
 
     ensureAppleStyle();
     ensureSaveDock(app);
@@ -784,38 +824,17 @@
 
     const originalSave = app.save.bind(app);
 
-    async function gzipBytes(text) {
-      const bytes = new TextEncoder().encode(text);
-      const cs = new CompressionStream('gzip');
-      const writer = cs.writable.getWriter();
-      writer.write(bytes);
-      writer.close();
-      const chunks = [];
-      const reader = cs.readable.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-      }
-      const total = chunks.reduce((n, c) => n + c.length, 0);
-      const out = new Uint8Array(total);
-      let off = 0;
-      for (const c of chunks) { out.set(c, off); off += c.length; }
-      return out;
-    }
-
     async function buildSnapshotRequest(data, baseRevision) {
       const rawText = JSON.stringify({ data, baseRevision });
-      if (rawText.length > 32768 && typeof CompressionStream === 'function') {
-        try {
-          const compressed = await gzipBytes(rawText);
-          return {
-            body: compressed,
-            headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' },
-          };
-        } catch (_) {
-          // fall through to uncompressed
-        }
+      const gzippedBody = await gzipTextPayload(rawText);
+      if (gzippedBody) {
+        return {
+          body: gzippedBody,
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Encoding': 'gzip',
+          },
+        };
       }
       return {
         body: rawText,
@@ -872,19 +891,18 @@
 
         if (saveResult && saveResult.status === 409) {
           if (localDirty) backupUnsynced(app);
-          // 先用轻量 meta 接口刷新版本号（避免 50MB 全量下载超时导致 lastKnownRevision 没更新）
-          try {
-            const metaOnConflict = await fetchJson(REMOTE_META_ENDPOINT, { method: 'GET' }, 8000);
-            if (metaOnConflict.ok) {
-              const rev = Number(metaOnConflict.data?.revision);
-              if (Number.isFinite(rev) && rev > lastKnownRevision) {
-                lastKnownRevision = rev;
-                lastSyncAt = String(metaOnConflict.data?.updatedAt || '');
-              }
+          const latestMeta = await fetchJson(REMOTE_META_ENDPOINT, { method: 'GET' }, 5000);
+          if (latestMeta.ok) {
+            const remoteRevisionFromMeta = Number(latestMeta.data?.revision || 0);
+            if (Number.isFinite(remoteRevisionFromMeta) && remoteRevisionFromMeta >= 0) {
+              lastKnownRevision = remoteRevisionFromMeta;
             }
-          } catch (_) {}
-          // 再全量拉取最新数据刷新界面（使用完整超时，允许大文件）
-          const latestResult = await fetchJson(REMOTE_ENDPOINT, { method: 'GET' }, REMOTE_FULL_FETCH_TIMEOUT_MS);
+          }
+          const latestResult = await fetchJson(
+            REMOTE_ENDPOINT,
+            { method: 'GET' },
+            REMOTE_FULL_FETCH_TIMEOUT_MS
+          );
           if (latestResult.ok && latestResult.data) {
             applyRemoteSnapshot(app, latestResult.data, '检测到他人更新，已自动刷新为最新版本');
             await persistLocal(app, originalSave);
@@ -910,6 +928,8 @@
             message = '服务器未识别该接口（可能后端文件未更新），请确认已部署最新版 server.js 并重启服务';
           } else if (saveResult.status === 413) {
             message = '导入数据体积过大，服务器拒绝保存，请联系管理员调大限制';
+          } else if (saveResult.status === 408) {
+            message = '同步请求超时，正在自动刷新服务器版本，请稍后重试';
           }
           setSyncStatus('同步失败');
           setLastSaveError(message);
@@ -931,18 +951,19 @@
         }
         return true;
       } catch (err) {
-        // 保存请求超时或网络错误时，服务端可能已处理并推进了 revision；
-        // 用轻量 meta 接口刷新 lastKnownRevision，避免下次保存因版本不匹配持续 409
         try {
-          const metaOnError = await fetchJson(REMOTE_META_ENDPOINT, { method: 'GET' }, 5000);
-          if (metaOnError.ok) {
-            const rev = Number(metaOnError.data?.revision);
-            if (Number.isFinite(rev) && rev > lastKnownRevision) {
-              lastKnownRevision = rev;
-              lastSyncAt = String(metaOnError.data?.updatedAt || '');
+          const latestMeta = await fetchJson(REMOTE_META_ENDPOINT, { method: 'GET' }, 5000);
+          if (latestMeta.ok) {
+            const remoteRevision = Number(latestMeta.data?.revision || 0);
+            if (Number.isFinite(remoteRevision) && remoteRevision >= 0) {
+              lastKnownRevision = remoteRevision;
+              lastSyncAt = String(latestMeta.data?.updatedAt || lastSyncAt || '');
+              renderSyncMeta();
             }
           }
-        } catch (_) {}
+        } catch (_) {
+          // ignore meta refresh errors
+        }
         setSyncStatus('同步失败');
         setLastSaveError((err && err.message) || '专项看板同步失败，请检查网络或登录状态');
         if (!options.silentErrorToast) {

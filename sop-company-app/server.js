@@ -17,6 +17,8 @@ const HISTORY_DIR = path.join(DATA_ROOT, "history");
 const METADATA_DIR = path.join(DATA_ROOT, "metadata");
 const USERS_FILE = path.join(DATA_ROOT, "users.json");
 const SPECIAL_BOARD_FILE = path.join(DATA_ROOT, "special-board.json");
+const SPECIAL_BOARD_META_FILE = path.join(DATA_ROOT, "special-board-meta.json");
+const SPECIAL_BOARD_DEPTS_DIR = path.join(DATA_ROOT, "special-board-depts");
 const SPECIAL_BOARD_STORAGE = String(process.env.SPECIAL_BOARD_STORAGE || "file").toLowerCase();
 const PG_SSL = String(process.env.PG_SSL || "").toLowerCase() === "true";
 
@@ -71,12 +73,14 @@ fs.mkdirSync(DATA_ROOT, { recursive: true });
 fs.mkdirSync(DOCUMENTS_DIR, { recursive: true });
 fs.mkdirSync(HISTORY_DIR, { recursive: true });
 fs.mkdirSync(METADATA_DIR, { recursive: true });
+fs.mkdirSync(SPECIAL_BOARD_DEPTS_DIR, { recursive: true });
 
 const sessions = new Map();
 const loginAttempts = new Map();
 const specialBoardStreamClients = new Set();
 let specialBoardPgPool = null;
 let specialBoardDbReady = false;
+let lastSpecialBoardChangedDept = null;
 
 function writeSseFrame(res, event, payload) {
   try {
@@ -88,13 +92,15 @@ function writeSseFrame(res, event, payload) {
   }
 }
 
-function broadcastSpecialBoardUpdate(store) {
+function broadcastSpecialBoardUpdate(store, changedDept = null) {
+  const payload = {
+    revision: Number(store?.revision || 0),
+    updatedAt: String(store?.updatedAt || ""),
+    updatedBy: String(store?.updatedBy || ""),
+  };
+  if (changedDept) payload.changedDept = String(changedDept);
   for (const client of [...specialBoardStreamClients]) {
-    const ok = writeSseFrame(client, "update", {
-      revision: Number(store?.revision || 0),
-      updatedAt: String(store?.updatedAt || ""),
-      updatedBy: String(store?.updatedBy || ""),
-    });
+    const ok = writeSseFrame(client, "update", payload);
     if (!ok) {
       specialBoardStreamClients.delete(client);
     }
@@ -270,6 +276,169 @@ function normalizeSpecialBoardData(input = {}) {
   };
 }
 
+function sanitizeDeptFileName(name) {
+  return String(name || "")
+    .trim()
+    .replace(/[/\\?%*:|"<>\s]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
+    .slice(0, 120) || "dept";
+}
+
+function getDeptFilePath(deptName) {
+  const safe = sanitizeDeptFileName(deptName);
+  const resolved = path.resolve(SPECIAL_BOARD_DEPTS_DIR, safe + ".json");
+  if (!resolved.startsWith(path.resolve(SPECIAL_BOARD_DEPTS_DIR) + path.sep)) {
+    throw new Error("Invalid dept name");
+  }
+  return resolved;
+}
+
+function readSpecialBoardMetaFromFile() {
+  if (!fs.existsSync(SPECIAL_BOARD_META_FILE)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(SPECIAL_BOARD_META_FILE, "utf8"));
+    return {
+      revision: Math.max(0, Math.trunc(Number(raw.revision) || 0)),
+      updatedAt: String(raw.updatedAt || ""),
+      updatedBy: String(raw.updatedBy || ""),
+      depts: Array.isArray(raw.depts) ? raw.depts.map((v) => String(v || "").trim()).filter(Boolean) : [],
+      notes: raw.notes && typeof raw.notes === "object"
+        ? raw.notes
+        : { depts: "", modules: "", flows: "", sipoc: "", drafting: "", final: "", published: "" },
+    };
+  } catch (_) {
+    return { revision: 0, updatedAt: "", updatedBy: "", depts: [], notes: {} };
+  }
+}
+
+function readDeptStoreFromFile(deptName) {
+  try {
+    const filePath = getDeptFilePath(deptName);
+    if (!fs.existsSync(filePath)) {
+      return { revision: 0, updatedAt: "", updatedBy: "", arch: [], plans: [], deptOrg: {} };
+    }
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return {
+      revision: Math.max(0, Math.trunc(Number(raw.revision) || 0)),
+      updatedAt: String(raw.updatedAt || ""),
+      updatedBy: String(raw.updatedBy || ""),
+      arch: Array.isArray(raw.arch) ? raw.arch : [],
+      plans: Array.isArray(raw.plans) ? raw.plans : [],
+      deptOrg: raw.deptOrg && typeof raw.deptOrg === "object" ? raw.deptOrg : {},
+    };
+  } catch (_) {
+    return { revision: 0, updatedAt: "", updatedBy: "", arch: [], plans: [], deptOrg: {} };
+  }
+}
+
+function assembleSpecialBoardFromPerDept(meta) {
+  const depts = Array.isArray(meta.depts) ? meta.depts : [];
+  let arch = [], plans = [], deptOrg = {};
+  for (const deptName of depts) {
+    const d = readDeptStoreFromFile(deptName);
+    arch = arch.concat(d.arch);
+    plans = plans.concat(d.plans);
+    if (d.deptOrg && typeof d.deptOrg === "object") {
+      Object.assign(deptOrg, d.deptOrg);
+    }
+  }
+  return {
+    revision: meta.revision,
+    updatedAt: meta.updatedAt,
+    updatedBy: meta.updatedBy,
+    data: normalizeSpecialBoardData({ depts, arch, plans, deptOrg, notes: meta.notes }),
+  };
+}
+
+function migrateToPerDeptStorage() {
+  if (fs.existsSync(SPECIAL_BOARD_META_FILE)) return;
+  if (!fs.existsSync(SPECIAL_BOARD_FILE)) return;
+  try {
+    const old = JSON.parse(fs.readFileSync(SPECIAL_BOARD_FILE, "utf8"));
+    const revision = Math.max(0, Math.trunc(Number(old.revision) || 0));
+    const data = normalizeSpecialBoardData(old.data || {});
+    const now = String(old.updatedAt || new Date().toISOString());
+    const by = String(old.updatedBy || "system");
+
+    const newMeta = {
+      revision,
+      updatedAt: now,
+      updatedBy: by,
+      depts: data.depts,
+      notes: data.notes,
+    };
+    fs.writeFileSync(SPECIAL_BOARD_META_FILE, JSON.stringify(newMeta, null, 2), "utf8");
+
+    for (const deptName of data.depts) {
+      const deptData = {
+        revision,
+        updatedAt: now,
+        updatedBy: by,
+        arch: data.arch.filter((m) => m.dept === deptName),
+        plans: data.plans.filter((p) => p.dept === deptName),
+        deptOrg: data.deptOrg[deptName] != null ? { [deptName]: data.deptOrg[deptName] } : {},
+      };
+      fs.writeFileSync(getDeptFilePath(deptName), JSON.stringify(deptData), "utf8");
+    }
+    console.log(`[SpecialBoard] Migrated to per-dept storage: ${data.depts.length} depts`);
+  } catch (err) {
+    console.error("[SpecialBoard] Migration failed:", err.message);
+  }
+}
+
+function writeDeptStoreToFile(deptName, deptData, user, options = {}) {
+  migrateToPerDeptStorage();
+  const currentMeta = readSpecialBoardMetaFromFile() || {
+    revision: 0, updatedAt: "", updatedBy: "", depts: [], notes: {},
+  };
+  const currentDept = readDeptStoreFromFile(deptName);
+
+  if (options.expectedDeptRevision !== undefined && options.expectedDeptRevision !== null) {
+    const expected = Number(options.expectedDeptRevision);
+    if (Number.isFinite(expected) && expected >= 0 && Math.trunc(expected) !== currentDept.revision) {
+      return { conflict: true, currentDeptRevision: currentDept.revision, currentGlobalRevision: currentMeta.revision };
+    }
+  }
+
+  const now = new Date().toISOString();
+  const updatedBy = String(user?.username || "system");
+  const newDeptRevision = currentDept.revision + 1;
+  const newGlobalRevision = currentMeta.revision + 1;
+
+  const newDeptStore = {
+    revision: newDeptRevision,
+    updatedAt: now,
+    updatedBy,
+    arch: Array.isArray(deptData.arch) ? deptData.arch : [],
+    plans: Array.isArray(deptData.plans) ? deptData.plans : [],
+    deptOrg: deptData.deptOrg && typeof deptData.deptOrg === "object" ? deptData.deptOrg : {},
+  };
+  fs.writeFileSync(getDeptFilePath(deptName), JSON.stringify(newDeptStore), "utf8");
+
+  const newMeta = {
+    ...currentMeta,
+    revision: newGlobalRevision,
+    updatedAt: now,
+    updatedBy,
+  };
+  if (!newMeta.depts.includes(deptName)) {
+    newMeta.depts = [...newMeta.depts, deptName];
+  }
+  fs.writeFileSync(SPECIAL_BOARD_META_FILE, JSON.stringify(newMeta, null, 2), "utf8");
+
+  lastSpecialBoardChangedDept = deptName;
+  broadcastSpecialBoardUpdate({ revision: newGlobalRevision, updatedAt: now, updatedBy }, deptName);
+
+  return {
+    conflict: false,
+    revision: newGlobalRevision,
+    deptRevision: newDeptRevision,
+    updatedAt: now,
+    updatedBy,
+  };
+}
+
 function filterSpecialBoardDataForUser(store, user) {
   if (!user || user.role === "admin" || !user.department) return store;
   const dept = user.department;
@@ -300,6 +469,11 @@ function hasSpecialBoardData(input = {}) {
 }
 
 function readSpecialBoardStoreFromFile() {
+  migrateToPerDeptStorage();
+  const meta = readSpecialBoardMetaFromFile();
+  if (meta) {
+    return assembleSpecialBoardFromPerDept(meta);
+  }
   if (!fs.existsSync(SPECIAL_BOARD_FILE)) {
     return { revision: 0, updatedAt: "", updatedBy: "", data: normalizeSpecialBoardData({}) };
   }
@@ -338,12 +512,17 @@ function buildSpecialBoardChangesPayloadFromStore(store, queryRevision, includeD
 }
 
 function writeSpecialBoardStoreToFile(data, user, options = {}) {
-  const current = readSpecialBoardStoreFromFile();
+  migrateToPerDeptStorage();
+  const currentMeta = readSpecialBoardMetaFromFile();
+  const currentRevision = currentMeta ? currentMeta.revision : 0;
   const normalizedData = normalizeSpecialBoardData(data);
-  const currentHasData = hasSpecialBoardData(current.data);
+
   const incomingHasData = hasSpecialBoardData(normalizedData);
-  if (currentHasData && !incomingHasData && !options.allowEmptyOverwrite) {
-    return { conflict: true, current, blockedEmptyOverwrite: true };
+  if (currentMeta && !incomingHasData && !options.allowEmptyOverwrite) {
+    const assembled = assembleSpecialBoardFromPerDept(currentMeta);
+    if (hasSpecialBoardData(assembled.data)) {
+      return { conflict: true, current: assembled, blockedEmptyOverwrite: true };
+    }
   }
 
   const hasExpectedRevision =
@@ -352,20 +531,45 @@ function writeSpecialBoardStoreToFile(data, user, options = {}) {
     options.expectedRevision !== "";
   if (hasExpectedRevision) {
     const expectedRevision = Number(options.expectedRevision);
-    if (Number.isFinite(expectedRevision) && expectedRevision >= 0 && Math.trunc(expectedRevision) !== current.revision) {
+    if (Number.isFinite(expectedRevision) && expectedRevision >= 0 && Math.trunc(expectedRevision) !== currentRevision) {
+      const current = currentMeta
+        ? assembleSpecialBoardFromPerDept(currentMeta)
+        : { revision: 0, updatedAt: "", updatedBy: "", data: normalizeSpecialBoardData({}) };
       return { conflict: true, current };
     }
   }
 
-  const payload = {
-    revision: current.revision + 1,
-    updatedAt: new Date().toISOString(),
-    updatedBy: String(user?.username || "system"),
-    data: normalizedData,
+  const newRevision = currentRevision + 1;
+  const now = new Date().toISOString();
+  const updatedBy = String(user?.username || "system");
+
+  const newMeta = {
+    revision: newRevision,
+    updatedAt: now,
+    updatedBy,
+    depts: normalizedData.depts,
+    notes: normalizedData.notes,
   };
-  fs.writeFileSync(SPECIAL_BOARD_FILE, JSON.stringify(payload), "utf8");
-  broadcastSpecialBoardUpdate(payload);
-  return { conflict: false, current: payload };
+  fs.writeFileSync(SPECIAL_BOARD_META_FILE, JSON.stringify(newMeta, null, 2), "utf8");
+
+  for (const deptName of normalizedData.depts) {
+    const deptData = {
+      revision: newRevision,
+      updatedAt: now,
+      updatedBy,
+      arch: normalizedData.arch.filter((m) => m.dept === deptName),
+      plans: normalizedData.plans.filter((p) => p.dept === deptName),
+      deptOrg: normalizedData.deptOrg[deptName] != null
+        ? { [deptName]: normalizedData.deptOrg[deptName] }
+        : {},
+    };
+    fs.writeFileSync(getDeptFilePath(deptName), JSON.stringify(deptData), "utf8");
+  }
+
+  const payload = { revision: newRevision, updatedAt: now, updatedBy };
+  lastSpecialBoardChangedDept = null;
+  broadcastSpecialBoardUpdate(payload, null);
+  return { conflict: false, current: { ...payload, data: normalizedData } };
 }
 
 function getSpecialBoardPgPool() {
@@ -1554,6 +1758,80 @@ async function handleApi(req, url, res) {
     return true;
   }
 
+  const deptRouteMatch = url.pathname.match(/^\/api\/special-board\/dept\/([^/]+)$/);
+  if (deptRouteMatch) {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    const deptName = safeDecodeURIComponent(deptRouteMatch[1]);
+    if (!deptName) { sendJson(res, 400, { error: "Invalid dept name" }); return true; }
+
+    const canAccessDept = user.role === "admin" || user.department === deptName;
+    if (!canAccessDept) { sendJson(res, 403, { error: "Access denied to this department" }); return true; }
+
+    if (req.method === "GET") {
+      if (SPECIAL_BOARD_STORAGE !== "postgres") {
+        migrateToPerDeptStorage();
+        const deptStore = readDeptStoreFromFile(deptName);
+        sendJson(res, 200, {
+          ok: true,
+          deptName,
+          deptRevision: deptStore.revision,
+          updatedAt: deptStore.updatedAt,
+          updatedBy: deptStore.updatedBy,
+          arch: deptStore.arch,
+          plans: deptStore.plans,
+          deptOrg: deptStore.deptOrg,
+        });
+      } else {
+        const store = await readSpecialBoardStore();
+        const d = store.data || {};
+        sendJson(res, 200, {
+          ok: true,
+          deptName,
+          deptRevision: store.revision,
+          updatedAt: store.updatedAt,
+          updatedBy: store.updatedBy,
+          arch: (d.arch || []).filter((m) => m.dept === deptName),
+          plans: (d.plans || []).filter((p) => p.dept === deptName),
+          deptOrg: d.deptOrg && d.deptOrg[deptName] != null ? { [deptName]: d.deptOrg[deptName] } : {},
+        });
+      }
+      return true;
+    }
+
+    if (req.method === "POST") {
+      const bodyState = await readJsonBody(req, res);
+      if (!bodyState.ok) return true;
+      const body = bodyState.body || {};
+      const baseDeptRevision = body.baseDeptRevision !== undefined ? body.baseDeptRevision : null;
+
+      if (SPECIAL_BOARD_STORAGE !== "postgres") {
+        const saved = writeDeptStoreToFile(deptName, body, user, {
+          expectedDeptRevision: baseDeptRevision !== null ? Number(baseDeptRevision) : undefined,
+        });
+        if (saved.conflict) {
+          sendJson(res, 409, {
+            error: "Dept has a newer version. Please refresh before saving.",
+            conflict: true,
+            currentDeptRevision: saved.currentDeptRevision,
+            currentRevision: saved.currentGlobalRevision,
+          });
+          return true;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          revision: saved.revision,
+          deptRevision: saved.deptRevision,
+          updatedAt: saved.updatedAt,
+          updatedBy: saved.updatedBy,
+        });
+      } else {
+        sendJson(res, 501, { error: "Per-dept POST not supported in postgres mode; use /api/special-board" });
+      }
+      return true;
+    }
+  }
+
   if (req.method === "GET" && apiPath === "/api/special-board") {
     const user = requireAuth(req, res);
     if (!user) return true;
@@ -1565,6 +1843,27 @@ async function handleApi(req, url, res) {
   if (req.method === "GET" && apiPath === "/api/special-board/meta") {
     const user = requireAuth(req, res);
     if (!user) return true;
+    if (SPECIAL_BOARD_STORAGE !== "postgres") {
+      migrateToPerDeptStorage();
+      const meta = readSpecialBoardMetaFromFile();
+      if (meta) {
+        const filtered = filterSpecialBoardDataForUser(
+          { revision: meta.revision, updatedAt: meta.updatedAt, updatedBy: meta.updatedBy,
+            data: { depts: meta.depts, arch: [], plans: [], deptOrg: {}, notes: meta.notes } },
+          user
+        );
+        sendJson(res, 200, {
+          ok: true,
+          revision: meta.revision,
+          updatedAt: meta.updatedAt,
+          updatedBy: meta.updatedBy,
+          depts: filtered.data.depts,
+          notes: meta.notes,
+          perDept: true,
+        });
+        return true;
+      }
+    }
     const store = await readSpecialBoardStore();
     sendJson(res, 200, {
       ok: true,
@@ -1583,9 +1882,20 @@ async function handleApi(req, url, res) {
     const revision = url.searchParams.get("revision");
     const rawStore = await readSpecialBoardStore();
     const filteredStore = filterSpecialBoardDataForUser(rawStore, user);
+    const changesPayload = buildSpecialBoardChangesPayloadFromStore(filteredStore, revision, includeData);
+
+    const queryRevisionNum = Number(revision);
+    const mayHintDept =
+      changesPayload.changed &&
+      Number.isFinite(queryRevisionNum) &&
+      rawStore.revision - queryRevisionNum === 1 &&
+      lastSpecialBoardChangedDept;
+    const hintDept = mayHintDept ? lastSpecialBoardChangedDept : null;
+
     sendJson(res, 200, {
       ok: true,
-      ...buildSpecialBoardChangesPayloadFromStore(filteredStore, revision, includeData),
+      ...changesPayload,
+      ...(hintDept ? { changedDept: hintDept } : {}),
     });
     return true;
   }

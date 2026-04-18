@@ -2,12 +2,13 @@
   const REMOTE_ENDPOINT = '/api/special-board';
   const REMOTE_CHANGES_ENDPOINT = '/api/special-board/changes';
   const REMOTE_META_ENDPOINT = '/api/special-board/meta';
+  const REMOTE_DEPT_ENDPOINT = '/api/special-board/dept';
   const REMOTE_STREAM_ENDPOINT = '/api/special-board/stream';
   const SESSION_ENDPOINT = '/api/session';
-  const SPECIAL_BOARD_VERSION = '20260417-26';
+  const SPECIAL_BOARD_VERSION = '20260418-50';
   const SPECIAL_BOARD_CACHE_CLEANUP_KEY = 'special_board_cache_cleanup_v1';
-  const POLL_INTERVAL_MS = 1200;
-  const AUTO_SAVE_DEBOUNCE_MS = 1800;
+  const POLL_INTERVAL_MS = 600;
+  const AUTO_SAVE_DEBOUNCE_MS = 600;
   const REMOTE_FULL_FETCH_TIMEOUT_MS = 120000;
   const INITIAL_SYNC_FETCH_TIMEOUT_MS = 120000;
   const UNSYNCED_BACKUP_KEY = 'special_board_unsynced_backup_v1';
@@ -34,6 +35,16 @@
   let lastSaveErrorMessage = '';
   let supportsSpecialBoardChangesApi = true;
   let authRedirecting = false;
+  let currentSessionUser = null;
+  let deptRevisions = {};
+
+  function isCurrentUserAdmin() {
+    return currentSessionUser ? currentSessionUser.role === 'admin' : (window.__currentUser?.role === 'admin');
+  }
+
+  function getCurrentUserDept() {
+    return currentSessionUser ? (currentSessionUser.department || '') : (window.__currentUser?.department || '');
+  }
 
   function isImporting() {
     return window.__specialImporting === true;
@@ -92,8 +103,10 @@
   async function ensureSessionReady() {
     const result = await fetchJson(SESSION_ENDPOINT, { method: 'GET' }, 8000);
     if (result.ok && result.data && result.data.user) {
-      window.__currentUser = result.data.user;
-      if (result.data.user.role !== 'admin') {
+      currentSessionUser = result.data.user;
+      window.__currentUser = currentSessionUser;
+      window.__specialSessionUser = currentSessionUser;
+      if (currentSessionUser.role !== 'admin') {
         document.body.classList.add('non-admin');
       }
       return true;
@@ -593,16 +606,56 @@
     app,
     originalSave,
     reason = '检测到他人更新，已自动刷新',
-    fetchTimeoutMs = REMOTE_FULL_FETCH_TIMEOUT_MS
+    fetchTimeoutMs = REMOTE_FULL_FETCH_TIMEOUT_MS,
+    changedDept = null
   ) {
     if (isImporting()) return false;
     const hadDirty = localDirty;
     if (hadDirty) backupUnsynced(app);
+    const noticeText = hadDirty ? `${reason}（本地草稿已自动备份）` : reason;
+
+    if (changedDept) {
+      const userDept = getCurrentUserDept();
+      const isAdmin = isCurrentUserAdmin();
+      if (!isAdmin && userDept && userDept !== changedDept) {
+        return false;
+      }
+
+      const deptResult = await fetchDeptData(changedDept, fetchTimeoutMs);
+      if (!deptResult.ok || !deptResult.data) {
+        return await syncFromServerLatest(app, originalSave, reason, fetchTimeoutMs, null);
+      }
+      const d = deptResult.data;
+      suppressDirtyWatch = true;
+      try {
+        if (Array.isArray(d.arch)) {
+          app.data.arch = (app.data.arch || []).filter((m) => m.dept !== changedDept).concat(d.arch);
+        }
+        if (Array.isArray(d.plans)) {
+          app.data.plans = (app.data.plans || []).filter((p) => p.dept !== changedDept).concat(d.plans);
+        }
+        if (d.deptOrg && typeof d.deptOrg === 'object') {
+          Object.assign(app.data.deptOrg || (app.data.deptOrg = {}), d.deptOrg);
+        }
+        refreshView(app);
+      } finally {
+        suppressDirtyWatch = false;
+      }
+      deptRevisions[changedDept] = Number(d.deptRevision || 0);
+      lastKnownRevision = Number(d.revision || d.deptRevision || lastKnownRevision + 1);
+      lastSyncAt = String(d.updatedAt || new Date().toISOString());
+      setSyncStatus('');
+      updateBaseline(app);
+      renderSyncMeta();
+      if (noticeText) toast(noticeText);
+      await persistLocal(app, originalSave);
+      return true;
+    }
 
     const fullResult = await fetchJson(REMOTE_ENDPOINT, { method: 'GET' }, fetchTimeoutMs);
     if (!fullResult.ok || !fullResult.data) return false;
 
-    const applied = applyRemoteSnapshot(app, fullResult.data, hadDirty ? `${reason}（本地草稿已自动备份）` : reason);
+    const applied = applyRemoteSnapshot(app, fullResult.data, noticeText);
     if (!applied) {
       setSyncStatus('服务器数据格式异常');
       setLastSaveError('服务器返回的数据格式异常，未应用到页面');
@@ -638,13 +691,15 @@
         const hasChanged = changesResult.data?.changed === true;
         if (!Number.isFinite(remoteRevision) || remoteRevision <= lastKnownRevision || !hasChanged) return;
 
+        const pollChangedDept = changesResult.data?.changedDept || null;
         await syncFromServerLatest(
           app,
           originalSave,
           localDirty
             ? '检测到他人更新，已自动刷新到最新版本（本地草稿已自动备份）'
             : '检测到他人更新，已自动刷新到最新版本',
-          REMOTE_FULL_FETCH_TIMEOUT_MS
+          REMOTE_FULL_FETCH_TIMEOUT_MS,
+          pollChangedDept
         );
         return;
       }
@@ -723,7 +778,8 @@
         const payload = JSON.parse(event.data || '{}');
         const revision = Number(payload.revision || 0);
         if (!Number.isFinite(revision) || revision <= lastKnownRevision || saveInFlight || isImporting()) return;
-        await syncFromServerLatest(app, originalSave, '检测到他人更新，已自动实时刷新');
+        const sseChangedDept = payload.changedDept || null;
+        await syncFromServerLatest(app, originalSave, '检测到他人更新，已自动实时刷新', REMOTE_FULL_FETCH_TIMEOUT_MS, sseChangedDept);
       } catch (_) {
         // ignore malformed event
       }
@@ -749,6 +805,51 @@
         }, delay);
       }
     };
+  }
+
+  function snapshotDept(app, deptName) {
+    const orgVal = app.data?.deptOrg ? app.data.deptOrg[deptName] : undefined;
+    return {
+      arch: (app.data?.arch || []).filter((m) => m.dept === deptName),
+      plans: (app.data?.plans || []).filter((p) => p.dept === deptName),
+      deptOrg: orgVal != null ? { [deptName]: orgVal } : {},
+    };
+  }
+
+  function getDeptHash(app, deptName) {
+    try { return JSON.stringify(snapshotDept(app, deptName)); } catch (_) { return ''; }
+  }
+
+  function assembleBoardData(metaData, deptsDataMap) {
+    const depts = Array.isArray(metaData.depts) ? metaData.depts : [];
+    let arch = [], plans = [], deptOrg = {};
+    for (const deptName of depts) {
+      const d = deptsDataMap[deptName];
+      if (!d) continue;
+      arch = arch.concat(Array.isArray(d.arch) ? d.arch : []);
+      plans = plans.concat(Array.isArray(d.plans) ? d.plans : []);
+      if (d.deptOrg && typeof d.deptOrg === 'object') {
+        Object.assign(deptOrg, d.deptOrg);
+      }
+    }
+    return {
+      revision: Number(metaData.revision || 0),
+      updatedAt: String(metaData.updatedAt || ''),
+      updatedBy: String(metaData.updatedBy || ''),
+      data: { depts, arch, plans, deptOrg, notes: metaData.notes || {} },
+    };
+  }
+
+  async function fetchDeptData(deptName, timeoutMs) {
+    const result = await fetchJson(
+      `${REMOTE_DEPT_ENDPOINT}/${encodeURIComponent(deptName)}`,
+      { method: 'GET' },
+      timeoutMs || 30000
+    );
+    if (result.ok && result.data) {
+      deptRevisions[deptName] = Number(result.data.deptRevision || 0);
+    }
+    return result;
   }
 
   async function bootstrapBridge(app) {
@@ -813,6 +914,30 @@
       );
     }
 
+    async function postDeptToServer(deptName, deptData, baseDeptRevision, timeoutMs = 20000) {
+      const body = {
+        arch: deptData.arch || [],
+        plans: deptData.plans || [],
+        deptOrg: deptData.deptOrg || {},
+        baseDeptRevision: baseDeptRevision != null ? baseDeptRevision : undefined,
+      };
+      const rawText = JSON.stringify(body);
+      let reqBody = rawText;
+      let reqHeaders = { 'Content-Type': 'application/json' };
+      if (rawText.length > 32768 && typeof CompressionStream === 'function') {
+        try {
+          const compressed = await gzipBytes(rawText);
+          reqBody = compressed;
+          reqHeaders = { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' };
+        } catch (_) {}
+      }
+      return fetchJson(
+        `${REMOTE_DEPT_ENDPOINT}/${encodeURIComponent(deptName)}`,
+        { method: 'POST', headers: reqHeaders, body: reqBody },
+        timeoutMs
+      );
+    }
+
     app.save = async function patchedSave(options = {}) {
       if (!initialSyncDone && !options.manual && !options.force && !options.fromImport) return false;
       if (saveInFlight) {
@@ -829,75 +954,129 @@
       try {
         await originalSave();
         setSyncStatus('同步中...');
-        const dataToSave = snapshot(app);
         const saveTimeoutMs = Number(options.timeoutMs || 20000);
         const allowConflictRetry = options.force || options.fromImport;
         const maxConflictRetries = allowConflictRetry ? 4 : 1;
         let saveResult = null;
-        let conflictCount = 0;
 
-        while (conflictCount <= maxConflictRetries) {
-          saveResult = await postSnapshotToServer(dataToSave, lastKnownRevision, saveTimeoutMs);
-          if (saveResult.status !== 409) break;
+        const userDept = getCurrentUserDept();
+        const usePerDept = !isCurrentUserAdmin() && userDept;
 
-          conflictCount += 1;
-          const currentRevision = Number(saveResult.data?.currentRevision);
-          if (!Number.isFinite(currentRevision) || currentRevision < 0) break;
-          lastKnownRevision = currentRevision;
-          if (conflictCount > maxConflictRetries) break;
-        }
-
-        if (saveResult && saveResult.status === 409) {
-          if (localDirty) backupUnsynced(app);
-          // 先用轻量 meta 接口刷新版本号（避免 50MB 全量下载超时导致 lastKnownRevision 没更新）
-          try {
-            const metaOnConflict = await fetchJson(REMOTE_META_ENDPOINT, { method: 'GET' }, 8000);
-            if (metaOnConflict.ok) {
-              const rev = Number(metaOnConflict.data?.revision);
-              if (Number.isFinite(rev) && rev > lastKnownRevision) {
-                lastKnownRevision = rev;
-                lastSyncAt = String(metaOnConflict.data?.updatedAt || '');
-              }
-            }
-          } catch (_) {}
-          // 再全量拉取最新数据刷新界面（使用完整超时，允许大文件）
-          const latestResult = await fetchJson(REMOTE_ENDPOINT, { method: 'GET' }, REMOTE_FULL_FETCH_TIMEOUT_MS);
-          if (latestResult.ok && latestResult.data) {
-            applyRemoteSnapshot(app, latestResult.data, '检测到他人更新，已自动刷新为最新版本');
-            await persistLocal(app, originalSave);
+        if (usePerDept) {
+          // Non-admin: POST only their own dept file
+          const deptData = snapshotDept(app, userDept);
+          const baseDeptRev = deptRevisions[userDept] != null ? deptRevisions[userDept] : undefined;
+          let conflictCount = 0;
+          let currentBaseDeptRev = baseDeptRev;
+          while (conflictCount <= maxConflictRetries) {
+            saveResult = await postDeptToServer(userDept, deptData, currentBaseDeptRev, saveTimeoutMs);
+            if (saveResult.status !== 409) break;
+            conflictCount += 1;
+            const newDeptRev = Number(saveResult.data?.currentDeptRevision);
+            if (!Number.isFinite(newDeptRev)) break;
+            currentBaseDeptRev = newDeptRev;
+            const newGlobalRev = Number(saveResult.data?.currentRevision);
+            if (Number.isFinite(newGlobalRev) && newGlobalRev > lastKnownRevision) lastKnownRevision = newGlobalRev;
+            if (conflictCount > maxConflictRetries) break;
           }
-          setSyncStatus('');
-          const msg = saveResult.data?.blockedEmptyOverwrite
-            ? '已阻止空白数据覆盖服务器版本，页面已回滚到最新数据'
-            : allowConflictRetry
+
+          if (saveResult && saveResult.status === 409) {
+            if (localDirty) backupUnsynced(app);
+            try {
+              const deptResult = await fetchDeptData(userDept, 15000);
+              if (deptResult.ok && deptResult.data) {
+                const d = deptResult.data;
+                suppressDirtyWatch = true;
+                try {
+                  if (Array.isArray(d.arch)) {
+                    app.data.arch = (app.data.arch || []).filter((m) => m.dept !== userDept).concat(d.arch);
+                  }
+                  if (Array.isArray(d.plans)) {
+                    app.data.plans = (app.data.plans || []).filter((p) => p.dept !== userDept).concat(d.plans);
+                  }
+                  if (d.deptOrg) Object.assign(app.data.deptOrg || (app.data.deptOrg = {}), d.deptOrg);
+                } finally { suppressDirtyWatch = false; }
+                deptRevisions[userDept] = Number(d.deptRevision || 0);
+              }
+            } catch (_) {}
+            setSyncStatus('');
+            const msg = allowConflictRetry
               ? '多人正在同时编辑，自动重试后仍冲突，请稍后再保存'
               : '发现新版本，页面已刷新，请再次点击保存到服务器';
-          setLastSaveError(msg);
-          if (!options.silentErrorToast) {
-            toast(msg, 'error');
+            setLastSaveError(msg);
+            if (!options.silentErrorToast) toast(msg, 'error');
+            return false;
           }
-          return false;
+
+          if (!saveResult || !saveResult.ok) {
+            let message = saveResult?.data?.error || '专项看板同步到服务器失败';
+            if (saveResult?.status === 401 || saveResult?.status === 403) message = '登录状态已失效，请重新登录后再保存';
+            setSyncStatus('同步失败');
+            setLastSaveError(message);
+            if (!options.silentErrorToast) toast(message, 'error');
+            return false;
+          }
+
+          deptRevisions[userDept] = Number(saveResult.data?.deptRevision || (deptRevisions[userDept] || 0) + 1);
+          lastKnownRevision = Number(saveResult.data?.revision || lastKnownRevision + 1);
+          lastSyncAt = String(saveResult.data?.updatedAt || new Date().toISOString());
+        } else {
+          // Admin (or fallback): POST full snapshot
+          const dataToSave = snapshot(app);
+          let conflictCount = 0;
+          while (conflictCount <= maxConflictRetries) {
+            saveResult = await postSnapshotToServer(dataToSave, lastKnownRevision, saveTimeoutMs);
+            if (saveResult.status !== 409) break;
+            conflictCount += 1;
+            const currentRevision = Number(saveResult.data?.currentRevision);
+            if (!Number.isFinite(currentRevision) || currentRevision < 0) break;
+            lastKnownRevision = currentRevision;
+            if (conflictCount > maxConflictRetries) break;
+          }
+
+          if (saveResult && saveResult.status === 409) {
+            if (localDirty) backupUnsynced(app);
+            try {
+              const metaOnConflict = await fetchJson(REMOTE_META_ENDPOINT, { method: 'GET' }, 8000);
+              if (metaOnConflict.ok) {
+                const rev = Number(metaOnConflict.data?.revision);
+                if (Number.isFinite(rev) && rev > lastKnownRevision) {
+                  lastKnownRevision = rev;
+                  lastSyncAt = String(metaOnConflict.data?.updatedAt || '');
+                }
+              }
+            } catch (_) {}
+            const latestResult = await fetchJson(REMOTE_ENDPOINT, { method: 'GET' }, REMOTE_FULL_FETCH_TIMEOUT_MS);
+            if (latestResult.ok && latestResult.data) {
+              applyRemoteSnapshot(app, latestResult.data, '检测到他人更新，已自动刷新为最新版本');
+              await persistLocal(app, originalSave);
+            }
+            setSyncStatus('');
+            const msg = saveResult.data?.blockedEmptyOverwrite
+              ? '已阻止空白数据覆盖服务器版本，页面已回滚到最新数据'
+              : allowConflictRetry
+                ? '多人正在同时编辑，自动重试后仍冲突，请稍后再保存'
+                : '发现新版本，页面已刷新，请再次点击保存到服务器';
+            setLastSaveError(msg);
+            if (!options.silentErrorToast) toast(msg, 'error');
+            return false;
+          }
+
+          if (!saveResult.ok) {
+            let message = saveResult.data?.error || '专项看板同步到服务器失败';
+            if (saveResult.status === 401 || saveResult.status === 403) message = '登录状态已失效，请重新登录后再保存';
+            else if (saveResult.status === 404) message = '服务器未识别该接口，请确认已部署最新版 server.js 并重启服务';
+            else if (saveResult.status === 413) message = '导入数据体积过大，服务器拒绝保存，请联系管理员调大限制';
+            setSyncStatus('同步失败');
+            setLastSaveError(message);
+            if (!options.silentErrorToast) toast(message, 'error');
+            return false;
+          }
+
+          lastKnownRevision = Number(saveResult.data?.revision || (lastKnownRevision + 1));
+          lastSyncAt = String(saveResult.data?.updatedAt || new Date().toISOString());
         }
 
-        if (!saveResult.ok) {
-          let message = saveResult.data?.error || '专项看板同步到服务器失败';
-          if (saveResult.status === 401 || saveResult.status === 403) {
-            message = '登录状态已失效，请重新登录后再保存';
-          } else if (saveResult.status === 404) {
-            message = '服务器未识别该接口（可能后端文件未更新），请确认已部署最新版 server.js 并重启服务';
-          } else if (saveResult.status === 413) {
-            message = '导入数据体积过大，服务器拒绝保存，请联系管理员调大限制';
-          }
-          setSyncStatus('同步失败');
-          setLastSaveError(message);
-          if (!options.silentErrorToast) {
-            toast(message, 'error');
-          }
-          return false;
-        }
-
-        lastKnownRevision = Number(saveResult.data?.revision || (lastKnownRevision + 1));
-        lastSyncAt = String(saveResult.data?.updatedAt || new Date().toISOString());
         setSyncStatus('');
         setLastSaveError('');
         updateBaseline(app);
@@ -951,7 +1130,39 @@
           setSyncStatus('服务器暂无数据');
           updateBaseline(app);
           await persistLocal(app, originalSave);
+        } else if (metaResult.data?.perDept && Array.isArray(metaResult.data.depts)) {
+          // Per-dept loading path: fetch each dept in parallel
+          const allDepts = metaResult.data.depts;
+          const userDept = getCurrentUserDept();
+          const isAdmin = isCurrentUserAdmin();
+          const deptsToFetch = isAdmin ? allDepts : allDepts.filter((d) => d === userDept);
+
+          setSyncStatus('加载部门数据...');
+          const deptResults = await Promise.all(
+            deptsToFetch.map((deptName) =>
+              fetchDeptData(deptName, INITIAL_SYNC_FETCH_TIMEOUT_MS)
+                .then((r) => ({ deptName, result: r }))
+            )
+          );
+
+          const deptsDataMap = {};
+          for (const { deptName, result } of deptResults) {
+            if (result.ok && result.data) {
+              deptsDataMap[deptName] = result.data;
+            }
+          }
+
+          const assembled = assembleBoardData(metaResult.data, deptsDataMap);
+          const applied = applyRemoteSnapshot(app, assembled, '已加载服务器同步数据');
+          if (applied) {
+            await persistLocal(app, originalSave);
+          } else {
+            setSyncStatus('服务器数据格式异常');
+            setLastSaveError('服务器返回的数据格式异常，未加载');
+            updateBaseline(app);
+          }
         } else {
+          // Fallback: full fetch (postgres or old server)
           const fullResult = await fetchJson(REMOTE_ENDPOINT, { method: 'GET' }, INITIAL_SYNC_FETCH_TIMEOUT_MS);
           if (fullResult.ok && fullResult.data) {
             const applied = applyRemoteSnapshot(app, fullResult.data, '已加载服务器同步数据');

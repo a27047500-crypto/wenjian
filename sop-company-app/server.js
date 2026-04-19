@@ -1883,7 +1883,52 @@ async function handleApi(req, url, res) {
           updatedBy: saved.updatedBy,
         });
       } else {
-        sendJson(res, 501, { error: "Per-dept POST not supported in postgres mode; use /api/special-board" });
+        // postgres mode: read full board, merge dept data, write back
+        const fullStore = await readSpecialBoardStore();
+        const fullData = fullStore.data || {};
+        const incomingArch = Array.isArray(body.arch) ? body.arch : [];
+        const incomingPlans = Array.isArray(body.plans) ? body.plans : [];
+        const incomingDeptOrg = (body.deptOrg && typeof body.deptOrg === "object") ? body.deptOrg : {};
+
+        const mergedArch = [
+          ...(fullData.arch || []).filter((m) => m.dept !== deptName),
+          ...incomingArch.map((m) => ({ ...m, dept: deptName })),
+        ];
+        const mergedPlans = [
+          ...(fullData.plans || []).filter((p) => p.dept !== deptName),
+          ...incomingPlans.map((p) => ({ ...p, dept: deptName })),
+        ];
+        const mergedDeptOrg = { ...(fullData.deptOrg || {}) };
+        if (incomingDeptOrg[deptName] !== undefined) {
+          mergedDeptOrg[deptName] = incomingDeptOrg[deptName];
+        }
+
+        const mergedData = {
+          ...fullData,
+          arch: mergedArch,
+          plans: mergedPlans,
+          deptOrg: mergedDeptOrg,
+        };
+
+        const expectedRev = baseDeptRevision !== null ? Number(baseDeptRevision) : undefined;
+        const saved = await writeSpecialBoardStore(mergedData, user, { expectedRevision: expectedRev });
+        if (saved.conflict) {
+          sendJson(res, 409, {
+            error: "Data has a newer version. Please refresh before saving.",
+            conflict: true,
+            currentRevision: saved.current?.revision,
+          });
+          return true;
+        }
+        lastSpecialBoardChangedDept = deptName;
+        broadcastSpecialBoardUpdate(saved.current, deptName);
+        sendJson(res, 200, {
+          ok: true,
+          revision: saved.current?.revision,
+          deptRevision: saved.current?.revision,
+          updatedAt: saved.current?.updatedAt,
+          updatedBy: saved.current?.updatedBy,
+        });
       }
       return true;
     }

@@ -5,7 +5,7 @@
   const REMOTE_DEPT_ENDPOINT = '/api/special-board/dept';
   const REMOTE_STREAM_ENDPOINT = '/api/special-board/stream';
   const SESSION_ENDPOINT = '/api/session';
-  const SPECIAL_BOARD_VERSION = '20260418-54';
+  const SPECIAL_BOARD_VERSION = '20260418-55';
   const SPECIAL_BOARD_CACHE_CLEANUP_KEY = 'special_board_cache_cleanup_v1';
   const POLL_INTERVAL_MS = 600;
   const AUTO_SAVE_DEBOUNCE_MS = 600;
@@ -40,6 +40,11 @@
 
   function isCurrentUserAdmin() {
     return currentSessionUser ? currentSessionUser.role === 'admin' : (window.__currentUser?.role === 'admin');
+  }
+
+  function canViewAllDepts() {
+    if (isCurrentUserAdmin()) return true;
+    return !!(currentSessionUser?.specialBoardViewAll || window.__currentUser?.specialBoardViewAll);
   }
 
   function getCurrentUserDept() {
@@ -108,6 +113,9 @@
       window.__specialSessionUser = currentSessionUser;
       if (currentSessionUser.role !== 'admin') {
         document.body.classList.add('non-admin');
+      }
+      if (currentSessionUser.specialBoardViewAll) {
+        document.body.classList.add('board-view-all');
       }
       return true;
     }
@@ -387,7 +395,7 @@
       app.renderPlanView();
       return;
     }
-    if (app.currentViewType === 'overview' && isCurrentUserAdmin() && typeof app.showOverview === 'function') {
+    if (app.currentViewType === 'overview' && canViewAllDepts() && typeof app.showOverview === 'function') {
       app.showOverview();
       return;
     }
@@ -395,7 +403,7 @@
       app.selectDept(app.currentDept);
       return;
     }
-    if (isCurrentUserAdmin() && typeof app.showOverview === 'function') app.showOverview();
+    if (canViewAllDepts() && typeof app.showOverview === 'function') app.showOverview();
   }
 
   function renderSyncMeta() {
@@ -582,8 +590,7 @@
 
     if (changedDept) {
       const userDept = getCurrentUserDept();
-      const isAdmin = isCurrentUserAdmin();
-      if (!isAdmin && userDept && userDept !== changedDept) {
+      if (!canViewAllDepts() && userDept && userDept !== changedDept) {
         return false;
       }
 
@@ -1101,7 +1108,7 @@
           const allDepts = metaResult.data.depts;
           const userDept = getCurrentUserDept();
           const isAdmin = isCurrentUserAdmin();
-          const deptsToFetch = isAdmin ? allDepts : allDepts.filter((d) => d === userDept);
+          const deptsToFetch = canViewAllDepts() ? allDepts : allDepts.filter((d) => d === userDept);
 
           setSyncStatus('加载部门数据...');
           const deptResults = await Promise.all(

@@ -611,6 +611,8 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         body.non-admin .admin-only-nav { display: none !important; }
         body.non-admin .admin-only-el { display: none !important; }
         body.non-admin .special-sync-dock { display: none !important; }
+        /* 全览权限用户可看总览报告 */
+        body.board-view-all #btnOverview { display: flex !important; }
 
         .btn-group { display: flex; flex-direction: column; gap: 5px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #1e293b; }
         .overview-btn { padding: 12px; background: #334155; border: 1px solid #475569; color: #e2e8f0; border-radius: 6px; cursor: pointer; font-size: 13px; transition: 0.2s; font-weight: 600; display: flex; align-items: center; gap: 10px; }
@@ -3340,7 +3342,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
 
 
 
-<script src="/special-bridge.js?v=20260418-54"></script>
+<script src="/special-bridge.js?v=20260418-55"></script>
 </body>
 </html>
 

@@ -486,6 +486,8 @@ function renderUsers() {
   userList.innerHTML = "";
 
   usersCache.forEach((user) => {
+    if (user.role === "admin") return;
+    const hasViewAll = !!user.specialBoardViewAll;
     const row = document.createElement("div");
     row.className = "list-card";
     row.innerHTML = `
@@ -495,6 +497,10 @@ function renderUsers() {
       <div class="doc-actions" style="margin-top:10px;">
         <button data-user-rename="${escapeHtml(user.username)}">改显示名/部门</button>
         <button data-user-reset-password="${escapeHtml(user.username)}">重置密码</button>
+        <button data-user-viewall="${escapeHtml(user.username)}" data-viewall-current="${hasViewAll}"
+          style="border-radius:980px; border:1.5px solid ${hasViewAll ? 'rgba(16,185,129,0.6)' : 'rgba(0,0,0,0.15)'}; background:${hasViewAll ? 'rgba(16,185,129,0.08)' : 'transparent'}; color:${hasViewAll ? '#059669' : '#64748b'}; font-size:12px; padding:0 14px; min-height:36px; white-space:nowrap;">
+          ${hasViewAll ? '✓ 全览已开放' : '开放全览权限'}
+        </button>
       </div>
     `;
     userList.appendChild(row);
@@ -578,6 +584,20 @@ function bindUserManageButtons(scope) {
       const ok = await updateUserByAdmin(username, { password: value });
       if (!ok) return;
       showToast(`已重置 ${username} 的密码`);
+    });
+  });
+
+  scope.querySelectorAll("[data-user-viewall]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const username = button.getAttribute("data-user-viewall");
+      const current = button.getAttribute("data-viewall-current") === "true";
+      const next = !current;
+      const label = next ? "开放" : "关闭";
+      if (!window.confirm(`确认${label} ${username} 的文件专项全览权限？`)) return;
+      const ok = await updateUserByAdmin(username, { specialBoardViewAll: next });
+      if (!ok) return;
+      showToast(`已${label} ${username} 的全览权限`);
+      await fetchUsersIfNeeded();
     });
   });
 }

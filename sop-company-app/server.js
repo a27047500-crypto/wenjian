@@ -275,6 +275,7 @@ function publicUser(user) {
     displayName: user.displayName,
     role: user.role,
     department: user.department || "",
+    specialBoardViewAll: !!user.specialBoardViewAll,
   };
 }
 
@@ -490,7 +491,7 @@ function writeDeptStoreToFile(deptName, deptData, user, options = {}) {
 }
 
 function filterSpecialBoardDataForUser(store, user) {
-  if (!user || user.role === "admin" || !user.department) return store;
+  if (!user || user.role === "admin" || user.specialBoardViewAll || !user.department) return store;
   const dept = user.department;
   const d = store.data || {};
   return {
@@ -1554,9 +1555,10 @@ async function handleUserAdminUpdate(req, res, adminUser, usernameInput) {
   const hasDisplayName = Object.prototype.hasOwnProperty.call(body, "displayName");
   const hasPassword = Object.prototype.hasOwnProperty.call(body, "password");
   const hasDepartment = Object.prototype.hasOwnProperty.call(body, "department");
+  const hasSpecialBoardViewAll = Object.prototype.hasOwnProperty.call(body, "specialBoardViewAll");
   const syncDepartmentGlobally = body.syncDepartmentGlobally === true;
 
-  if (!hasDisplayName && !hasPassword && !hasDepartment) {
+  if (!hasDisplayName && !hasPassword && !hasDepartment && !hasSpecialBoardViewAll) {
     sendJson(res, 400, { error: "No update fields provided" });
     return;
   }
@@ -1570,6 +1572,14 @@ async function handleUserAdminUpdate(req, res, adminUser, usernameInput) {
 
   const next = { ...users[index] };
   const oldDepartment = String(next.department || "").trim();
+
+  if (hasSpecialBoardViewAll) {
+    next.specialBoardViewAll = !!body.specialBoardViewAll;
+    users[index] = normalizeUserRecord(next);
+    saveUsers(users);
+    sendJson(res, 200, { ok: true, user: publicUser(users[index]) });
+    return;
+  }
 
   if (hasDisplayName) {
     const displayName = String(body.displayName || "").trim();

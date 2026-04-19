@@ -237,13 +237,15 @@ function createDefaultUsers() {
 }
 
 function normalizeUserRecord(user) {
-  return {
+  const record = {
     username: String(user?.username || "").trim(),
     displayName: String(user?.displayName || user?.username || "").trim(),
     role: user?.role === "admin" ? "admin" : user?.role === "viewer" ? "viewer" : "editor",
     department: String(user?.department || "").trim(),
     passwordHash: String(user?.passwordHash || "").trim(),
   };
+  if (user?.specialBoardViewAll) record.specialBoardViewAll = true;
+  return record;
 }
 
 function ensureUsersFile() {

@@ -1832,7 +1832,7 @@ async function handleApi(req, url, res) {
     const deptName = safeDecodeURIComponent(deptRouteMatch[1]);
     if (!deptName) { sendJson(res, 400, { error: "Invalid dept name" }); return true; }
 
-    const canAccessDept = user.role === "admin" || user.department === deptName;
+    const canAccessDept = user.role === "admin" || user.specialBoardViewAll || user.department === deptName;
     if (!canAccessDept) { sendJson(res, 403, { error: "Access denied to this department" }); return true; }
 
     if (req.method === "GET") {

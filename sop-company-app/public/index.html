@@ -66,35 +66,31 @@
       min-width: 0;
     }
 
-    .top-center-slot {
-      flex: 0 0 auto;
-      display: flex;
-      justify-content: flex-start;
-      align-items: center;
-      margin-left: 16px;
-    }
 
     .special-entry {
       min-height: 42px;
-      padding: 0 22px;
-      border-radius: 12px;
-      border: 2px solid rgba(0, 113, 227, 0.86);
-      background: rgba(255, 255, 255, 0.92);
+      padding: 0 18px;
+      border-radius: 980px;
+      border: 1.5px solid rgba(0, 113, 227, 0.55);
+      background: rgba(0, 113, 227, 0.06);
       color: #0a63c8;
-      font-weight: 600;
+      font-weight: 500;
+      font-size: 14px;
+      color: #0071e3;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       text-decoration: none;
-      transition: all .18s ease;
-      box-shadow: 0 8px 20px rgba(0, 113, 227, 0.14);
+      letter-spacing: -0.01em;
+      transition: background .15s ease, box-shadow .15s ease, border-color .15s ease;
+      box-shadow: none;
       white-space: nowrap;
     }
 
     .special-entry:hover {
-      transform: translateY(-1px);
-      background: #fff;
-      box-shadow: 0 14px 28px rgba(0, 113, 227, 0.2);
+      background: rgba(0, 113, 227, 0.12);
+      border-color: rgba(0, 113, 227, 0.8);
+      box-shadow: none;
     }
 
     .brand-mark {
@@ -605,16 +601,6 @@
     @media (max-width: 1220px) {
       .dashboard { grid-template-columns: 1fr; }
       .topbar { flex-wrap: wrap; }
-      .top-center-slot {
-        order: 3;
-        width: 100%;
-        justify-content: flex-start;
-        margin-left: 0;
-        margin-top: 6px;
-      }
-      .special-entry {
-        width: auto;
-      }
     }
 
     @media (max-width: 760px) {
@@ -636,10 +622,8 @@
           <p>部门起草、提交审核、统一归档。</p>
         </div>
       </div>
-      <div class="top-center-slot">
-        <a class="special-entry" href="/special-board.html?v=20260417-26" target="_blank" rel="noreferrer">打开文件专项看板</a>
-      </div>
       <div class="top-actions">
+        <a class="special-entry" href="/special-board.html?v=20260417-26" target="_blank" rel="noreferrer">文件专项看板</a>
         <button class="ghost" id="openLoginBtn">登录</button>
         <button class="ghost" id="logoutBtn" hidden>退出</button>
       </div>

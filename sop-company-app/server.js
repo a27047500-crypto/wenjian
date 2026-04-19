@@ -20,6 +20,9 @@ const SPECIAL_BOARD_FILE = path.join(DATA_ROOT, "special-board.json");
 const SPECIAL_BOARD_META_FILE = path.join(DATA_ROOT, "special-board-meta.json");
 const SPECIAL_BOARD_DEPTS_DIR = path.join(DATA_ROOT, "special-board-depts");
 const ATTACHMENTS_DIR = path.join(DATA_ROOT, "attachments");
+const AI_CONFIG_FILE = path.join(DATA_ROOT, "ai-config.json");
+const AI_LOGS_FILE = path.join(DATA_ROOT, "ai-logs.json");
+const HEARTBEAT_TIMEOUT_MS = 90 * 1000;
 const SPECIAL_BOARD_STORAGE = String(process.env.SPECIAL_BOARD_STORAGE || "file").toLowerCase();
 const PG_SSL = String(process.env.PG_SSL || "").toLowerCase() === "true";
 
@@ -163,6 +166,51 @@ function verifyPassword(password, storedHash) {
     ok: crypto.timingSafeEqual(expected, actual),
     needsUpgrade: true,
   };
+}
+
+function readAiConfig() {
+  try {
+    if (fs.existsSync(AI_CONFIG_FILE)) return JSON.parse(fs.readFileSync(AI_CONFIG_FILE, "utf8"));
+  } catch (_) {}
+  return {
+    enabled: process.env.AI_ENABLED !== "false",
+    defaultModel: process.env.DEEPSEEK_DEFAULT_MODEL || "deepseek-chat",
+    allowedModels: ["deepseek-chat", "deepseek-reasoner"],
+    limitPerUser: 0,
+    limitPerDept: 0,
+  };
+}
+
+function writeAiConfig(cfg) {
+  fs.writeFileSync(AI_CONFIG_FILE, JSON.stringify(cfg, null, 2));
+}
+
+function appendAiLog(entry) {
+  let logs = [];
+  try {
+    if (fs.existsSync(AI_LOGS_FILE)) logs = JSON.parse(fs.readFileSync(AI_LOGS_FILE, "utf8"));
+  } catch (_) {}
+  logs.push({ ts: new Date().toISOString(), ...entry });
+  if (logs.length > 2000) logs = logs.slice(-2000);
+  try { fs.writeFileSync(AI_LOGS_FILE, JSON.stringify(logs)); } catch (_) {}
+}
+
+function todayAiUsageByUser(username) {
+  try {
+    if (!fs.existsSync(AI_LOGS_FILE)) return 0;
+    const logs = JSON.parse(fs.readFileSync(AI_LOGS_FILE, "utf8"));
+    const today = new Date().toISOString().slice(0, 10);
+    return logs.filter(l => l.username === username && String(l.ts || "").slice(0, 10) === today).length;
+  } catch (_) { return 0; }
+}
+
+function todayAiUsageByDept(dept) {
+  try {
+    if (!fs.existsSync(AI_LOGS_FILE)) return 0;
+    const logs = JSON.parse(fs.readFileSync(AI_LOGS_FILE, "utf8"));
+    const today = new Date().toISOString().slice(0, 10);
+    return logs.filter(l => l.dept === dept && String(l.ts || "").slice(0, 10) === today).length;
+  } catch (_) { return 0; }
 }
 
 function createDefaultUsers() {
@@ -913,9 +961,12 @@ function buildSessionCookie(token, maxAgeSeconds) {
   return parts.join("; ");
 }
 
-function createSession(user) {
+function createSession(user, req) {
   const token = crypto.randomBytes(24).toString("hex");
   const expiresAt = Date.now() + SESSION_TTL_MS;
+  const now = Date.now();
+  const ip = req ? String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "").split(",")[0].trim() : "";
+  const userAgent = req ? String(req.headers["user-agent"] || "").slice(0, 300) : "";
   sessions.set(token, {
     token,
     username: user.username,
@@ -923,6 +974,10 @@ function createSession(user) {
     displayName: user.displayName,
     department: user.department,
     expiresAt,
+    ip,
+    userAgent,
+    loginAt: now,
+    lastSeenAt: now,
   });
   return { token, expiresAt };
 }
@@ -1464,7 +1519,7 @@ async function handleLogin(req, res) {
   }
 
   clearLoginAttempts(req, username);
-  const session = createSession(user);
+  const session = createSession(user, req);
   sendJson(
     res,
     200,
@@ -2235,9 +2290,22 @@ async function handleApi(req, url, res) {
   if (req.method === "POST" && apiPath === "/api/ai/chat") {
     const user = requireAuth(req, res);
     if (!user) return true;
+    const aiCfg = readAiConfig();
+    if (!aiCfg.enabled) {
+      sendJson(res, 503, { error: "AI 功能已被管理员关闭" });
+      return true;
+    }
     const key = process.env.DEEPSEEK_API_KEY || "";
     if (!key) {
       sendJson(res, 503, { error: "DeepSeek API Key 未配置，请联系管理员设置环境变量 DEEPSEEK_API_KEY" });
+      return true;
+    }
+    if (aiCfg.limitPerUser > 0 && todayAiUsageByUser(user.username) >= aiCfg.limitPerUser) {
+      sendJson(res, 429, { error: `今日 AI 调用已达个人上限（${aiCfg.limitPerUser} 次）` });
+      return true;
+    }
+    if (aiCfg.limitPerDept > 0 && user.department && todayAiUsageByDept(user.department) >= aiCfg.limitPerDept) {
+      sendJson(res, 429, { error: `今日 AI 调用已达部门上限（${aiCfg.limitPerDept} 次）` });
       return true;
     }
     const bodyState = await readJsonBody(req, res);
@@ -2247,7 +2315,8 @@ async function handleApi(req, url, res) {
       sendJson(res, 400, { error: "消息不能为空" });
       return true;
     }
-    const safeModel = ["deepseek-chat", "deepseek-reasoner"].includes(model) ? model : "deepseek-chat";
+    const safeModel = aiCfg.allowedModels.includes(model) ? model : (aiCfg.defaultModel || "deepseek-chat");
+    const _aiStartMs = Date.now();
     const https = require("https");
     const payload = JSON.stringify({ model: safeModel, messages, stream: true, max_tokens: 4096 });
     res.writeHead(200, {
@@ -2301,23 +2370,29 @@ async function handleApi(req, url, res) {
       reqAi.write(payload);
       reqAi.end();
     });
+    appendAiLog({ username: user.username, dept: user.department || "", model: safeModel, action: "chat", ms: Date.now() - _aiStartMs });
     return true;
   }
 
   if (req.method === "GET" && apiPath === "/api/ai/config") {
     const user = requireAuth(req, res);
     if (!user) return true;
+    const cfg = readAiConfig();
     const key = process.env.DEEPSEEK_API_KEY || "";
-    const enabled = process.env.AI_ENABLED !== "false";
-    const defaultModel = process.env.DEEPSEEK_DEFAULT_MODEL || "deepseek-chat";
-    const allowedModels = ["deepseek-chat", "deepseek-reasoner"];
+    const userUsage = todayAiUsageByUser(user.username);
+    const deptUsage = user.department ? todayAiUsageByDept(user.department) : 0;
     sendJson(res, 200, {
       config: {
-        enabled,
+        enabled: cfg.enabled,
         configured: !!key,
-        defaultModel,
-        allowedModels,
-        limits: { remainingByUser: null, remainingByDept: null },
+        defaultModel: cfg.defaultModel,
+        allowedModels: cfg.allowedModels,
+        limits: {
+          limitPerUser: cfg.limitPerUser,
+          limitPerDept: cfg.limitPerDept,
+          usageToday: userUsage,
+          deptUsageToday: deptUsage,
+        },
       },
     });
     return true;
@@ -2326,9 +2401,22 @@ async function handleApi(req, url, res) {
   if (req.method === "POST" && apiPath === "/api/ai/document-assist") {
     const user = requireAuth(req, res);
     if (!user) return true;
+    const aiCfg2 = readAiConfig();
+    if (!aiCfg2.enabled) {
+      sendJson(res, 503, { error: "AI 功能已被管理员关闭" });
+      return true;
+    }
     const key = process.env.DEEPSEEK_API_KEY || "";
     if (!key) {
       sendJson(res, 503, { error: "DeepSeek API Key 未配置，请联系管理员在服务器环境变量中设置 DEEPSEEK_API_KEY" });
+      return true;
+    }
+    if (aiCfg2.limitPerUser > 0 && todayAiUsageByUser(user.username) >= aiCfg2.limitPerUser) {
+      sendJson(res, 429, { error: `今日 AI 调用已达个人上限（${aiCfg2.limitPerUser} 次）` });
+      return true;
+    }
+    if (aiCfg2.limitPerDept > 0 && user.department && todayAiUsageByDept(user.department) >= aiCfg2.limitPerDept) {
+      sendJson(res, 429, { error: `今日 AI 调用已达部门上限（${aiCfg2.limitPerDept} 次）` });
       return true;
     }
     const bodyState = await readJsonBody(req, res);
@@ -2338,7 +2426,8 @@ async function handleApi(req, url, res) {
       sendJson(res, 400, { error: "正文内容不足，请先抓取或粘贴文档正文" });
       return true;
     }
-    const safeModel = ["deepseek-chat", "deepseek-reasoner"].includes(model) ? model : "deepseek-chat";
+    const safeModel = aiCfg2.allowedModels.includes(model) ? model : (aiCfg2.defaultModel || "deepseek-chat");
+    const _aiStart2Ms = Date.now();
     let systemPrompt, userPrompt;
     if (action === "review") {
       systemPrompt = "你是一位专业的SOP（标准作业程序）审阅专家，擅长发现流程文件中的高风险缺陷、逻辑漏洞和改进空间。请用中文回应，以结构化方式列出问题和建议。";
@@ -2389,10 +2478,105 @@ async function handleApi(req, url, res) {
         reqAi.end();
       });
       const content = result?.choices?.[0]?.message?.content || "";
+      appendAiLog({ username: user.username, dept: user.department || "", model: safeModel, action: action || "assist", ms: Date.now() - _aiStart2Ms });
       sendJson(res, 200, { content, model: safeModel });
     } catch (err) {
       sendJson(res, 502, { error: err.message || "DeepSeek API 调用失败" });
     }
+    return true;
+  }
+
+  // Heartbeat — any logged-in user, updates lastSeenAt
+  if (req.method === "POST" && apiPath === "/api/heartbeat") {
+    const cookies = parseCookies(req);
+    const token = decodeURIComponent(cookies[SESSION_COOKIE_NAME] || "");
+    if (token && sessions.has(token)) {
+      const sess = sessions.get(token);
+      if (sess.expiresAt > Date.now()) sess.lastSeenAt = Date.now();
+    }
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+
+  // Admin: online sessions grouped by username
+  if (req.method === "GET" && apiPath === "/api/admin/online-sessions") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    if (!isAdmin(user)) { sendJson(res, 403, { error: "Admin only" }); return true; }
+    const now = Date.now();
+    const threshold = now - HEARTBEAT_TIMEOUT_MS;
+    const byUser = {};
+    for (const [token, sess] of sessions) {
+      if (sess.expiresAt < now) { sessions.delete(token); continue; }
+      const online = (sess.lastSeenAt || 0) >= threshold;
+      const key = sess.username;
+      if (!byUser[key]) {
+        byUser[key] = {
+          username: sess.username,
+          displayName: sess.displayName || sess.username,
+          department: sess.department || "",
+          role: sess.role,
+          onlineCount: 0,
+          totalSessions: 0,
+          sessions: [],
+        };
+      }
+      byUser[key].totalSessions++;
+      if (online) byUser[key].onlineCount++;
+      byUser[key].sessions.push({
+        ip: sess.ip || "unknown",
+        userAgent: sess.userAgent || "",
+        loginAt: sess.loginAt || null,
+        lastSeenAt: sess.lastSeenAt || null,
+        online,
+      });
+    }
+    const list = Object.values(byUser).sort((a, b) => b.onlineCount - a.onlineCount || a.username.localeCompare(b.username));
+    sendJson(res, 200, { byUser: list, total: list.reduce((s, u) => s + u.onlineCount, 0) });
+    return true;
+  }
+
+  // Admin: read AI config
+  if (req.method === "GET" && apiPath === "/api/admin/ai-config") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    if (!isAdmin(user)) { sendJson(res, 403, { error: "Admin only" }); return true; }
+    sendJson(res, 200, { config: readAiConfig() });
+    return true;
+  }
+
+  // Admin: save AI config
+  if (req.method === "POST" && apiPath === "/api/admin/ai-config") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    if (!isAdmin(user)) { sendJson(res, 403, { error: "Admin only" }); return true; }
+    const body = await readJsonBody(req, res);
+    if (!body.ok) return true;
+    const VALID_MODELS = ["deepseek-chat", "deepseek-reasoner"];
+    const { enabled, defaultModel, allowedModels, limitPerUser, limitPerDept } = body.body;
+    const cfg = {
+      enabled: enabled !== false,
+      defaultModel: VALID_MODELS.includes(defaultModel) ? defaultModel : "deepseek-chat",
+      allowedModels: Array.isArray(allowedModels) ? allowedModels.filter(m => VALID_MODELS.includes(m)) : [...VALID_MODELS],
+      limitPerUser: Math.max(0, Number(limitPerUser) || 0),
+      limitPerDept: Math.max(0, Number(limitPerDept) || 0),
+    };
+    if (cfg.allowedModels.length === 0) cfg.allowedModels = [...VALID_MODELS];
+    writeAiConfig(cfg);
+    sendJson(res, 200, { ok: true, config: cfg });
+    return true;
+  }
+
+  // Admin: AI call logs
+  if (req.method === "GET" && apiPath === "/api/admin/ai-logs") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    if (!isAdmin(user)) { sendJson(res, 403, { error: "Admin only" }); return true; }
+    let logs = [];
+    try {
+      if (fs.existsSync(AI_LOGS_FILE)) logs = JSON.parse(fs.readFileSync(AI_LOGS_FILE, "utf8"));
+    } catch (_) {}
+    sendJson(res, 200, { logs: logs.slice(-500).reverse() });
     return true;
   }
 

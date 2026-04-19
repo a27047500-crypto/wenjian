@@ -724,6 +724,53 @@
           </div>
           <div class="people-list" id="userList"></div>
         </section>
+
+        <section class="panel" id="onlineSessionsCard" hidden>
+          <div class="panel-title" style="margin-bottom: 14px;">
+            <h3>在线账号监控</h3>
+            <p>含无操作保活：页面打开即算在线；并显示一个账号当前在线会话数量。</p>
+          </div>
+          <div id="onlineSessionsList"><div class="empty">正在读取在线账号数据...</div></div>
+        </section>
+
+        <section class="panel" id="aiAdminCard" hidden>
+          <div class="panel-title" style="margin-bottom: 14px;">
+            <h3>AI 管理</h3>
+            <p>管理员可设置 AI 开关、可选模型、每日限额，并查看调用日志。</p>
+          </div>
+          <div id="aiAdminPanel">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+              <div class="field">
+                <label>AI 开关</label>
+                <select class="input" id="aiEnabled">
+                  <option value="true">开启</option>
+                  <option value="false">关闭</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>默认模型</label>
+                <input class="input" id="aiDefaultModel" placeholder="如 deepseek-chat">
+              </div>
+              <div class="field">
+                <label>可用模型（英文逗号分隔）</label>
+                <input class="input" id="aiAllowedModels" placeholder="deepseek-chat,deepseek-reasoner">
+              </div>
+              <div class="field">
+                <label>个人每日调用上限（0=不限）</label>
+                <input class="input" type="number" id="aiLimitPerUser" min="0" placeholder="0">
+              </div>
+              <div class="field">
+                <label>部门每日调用上限（0=不限）</label>
+                <input class="input" type="number" id="aiLimitPerDept" min="0" placeholder="0">
+              </div>
+            </div>
+            <div style="display:flex;gap:10px;margin-bottom:16px;">
+              <button class="btn" onclick="saveAiConfig()">保存 AI 配置</button>
+              <button class="ghost" onclick="loadAiLogs()">刷新日志</button>
+            </div>
+            <div id="aiLogPanel" style="font-size:12px;max-height:260px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px;padding:10px;background:#f8fafc;color:#475569;"><div class="empty">正在读取 AI 配置...</div></div>
+          </div>
+        </section>
       </aside>
     </section>
   </div>

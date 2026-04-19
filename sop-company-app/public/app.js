@@ -217,12 +217,16 @@ function renderAccountCard() {
   const sessionArea = $("sessionArea");
   const reviewPanel = $("reviewPanel");
   const adminUsersCard = $("adminUsersCard");
+  const onlineSessionsCard = $("onlineSessionsCard");
+  const aiAdminCard = $("aiAdminCard");
 
   if (!currentSession) {
     accountCard.innerHTML = "<strong>未登录</strong><p>请先登录后访问文档库和审核功能。</p>";
     sessionArea.innerHTML = '<div class="empty">登录后可查看个人工作区。</div>';
     reviewPanel.hidden = true;
     adminUsersCard.hidden = true;
+    if (onlineSessionsCard) onlineSessionsCard.hidden = true;
+    if (aiAdminCard) aiAdminCard.hidden = true;
     return;
   }
 
@@ -248,6 +252,12 @@ function renderAccountCard() {
 
   reviewPanel.hidden = currentSession.role !== "admin";
   adminUsersCard.hidden = currentSession.role !== "admin";
+  if (onlineSessionsCard) onlineSessionsCard.hidden = currentSession.role !== "admin";
+  if (aiAdminCard) aiAdminCard.hidden = currentSession.role !== "admin";
+  if (currentSession.role === "admin") {
+    loadOnlineSessions();
+    loadAiConfig();
+  }
 }
 
 function updateStats() {
@@ -718,6 +728,7 @@ async function login() {
     renderAccountCard();
     await fetchDocuments();
     await fetchUsersIfNeeded();
+    startHeartbeat();
     showToast("登录成功");
   } catch (_) {
     showToast("登录请求失败，请检查服务是否启动");
@@ -736,6 +747,7 @@ async function logout() {
   usersCache = [];
   documentsCache = [];
   setLoggedInState();
+  stopHeartbeat();
   renderHero();
   renderAccountCard();
   renderDocuments();
@@ -792,6 +804,125 @@ function bindEvents() {
   });
 }
 
+// ── 心跳 ──────────────────────────────────────────────────────────────────────
+let _heartbeatTimer = null;
+function startHeartbeat() {
+  if (_heartbeatTimer) return;
+  const ping = () => { if (currentSession) fetch("/api/heartbeat", { method: "POST", credentials: "include" }).catch(() => {}); };
+  ping();
+  _heartbeatTimer = setInterval(ping, 30000);
+}
+function stopHeartbeat() {
+  clearInterval(_heartbeatTimer);
+  _heartbeatTimer = null;
+}
+
+// ── 在线账号监控 ──────────────────────────────────────────────────────────────
+async function loadOnlineSessions() {
+  const el = $("onlineSessionsList");
+  if (!el) return;
+  try {
+    const res = await fetch("/api/admin/online-sessions", { credentials: "include" });
+    const data = await res.json();
+    if (!res.ok) { el.innerHTML = `<div class="empty">加载失败：${escapeHtml(data.error || "未知错误")}</div>`; return; }
+    renderOnlineSessions(data);
+  } catch (e) {
+    el.innerHTML = `<div class="empty">请求失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderOnlineSessions(data) {
+  const el = $("onlineSessionsList");
+  if (!el) return;
+  const { byUser = [], total = 0 } = data;
+  if (byUser.length === 0) {
+    el.innerHTML = '<div class="empty">暂无在线账号（心跳 90 秒内算在线）</div>';
+    return;
+  }
+  const rows = byUser.map(u => {
+    const multi = u.onlineCount > 1;
+    const badge = u.onlineCount > 0
+      ? `<span style="background:${multi ? '#fee2e2' : '#dcfce7'};color:${multi ? '#ef4444' : '#16a34a'};padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;">${u.onlineCount > 0 ? `在线 ${u.onlineCount} 会话` : '离线'}${multi ? ' ⚠️多设备' : ''}</span>`
+      : `<span style="background:#f1f5f9;color:#94a3b8;padding:2px 8px;border-radius:12px;font-size:11px;">离线</span>`;
+    const deviceRows = u.sessions.map(s => {
+      const t = s.lastSeenAt ? new Date(s.lastSeenAt).toLocaleString("zh-CN") : "-";
+      const ua = s.userAgent ? s.userAgent.slice(0, 60) : "-";
+      return `<div style="font-size:11px;color:#64748b;padding:2px 0 2px 12px;border-left:2px solid ${s.online ? '#22c55e' : '#e2e8f0'};">
+        ${s.online ? '🟢' : '⚪'} IP: ${escapeHtml(s.ip)} · 最后活跃: ${t}<br><span style="color:#94a3b8">${escapeHtml(ua)}</span></div>`;
+    }).join('');
+    return `<div style="padding:10px 0;border-bottom:1px solid #f1f5f9;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <strong style="font-size:13px;">${escapeHtml(u.displayName)}</strong>
+        <span style="font-size:11px;color:#94a3b8;">${escapeHtml(u.username)} · ${escapeHtml(u.department || '未分配')}</span>
+        ${badge}
+      </div>
+      ${deviceRows}
+    </div>`;
+  }).join('');
+  el.innerHTML = `<div style="font-size:12px;color:#64748b;margin-bottom:8px;">当前在线总会话数：<strong>${total}</strong></div>${rows}
+    <button class="ghost" style="margin-top:10px;font-size:12px;" onclick="loadOnlineSessions()">刷新</button>`;
+}
+
+// ── AI 管理 ────────────────────────────────────────────────────────────────────
+async function loadAiConfig() {
+  try {
+    const res = await fetch("/api/admin/ai-config", { credentials: "include" });
+    const data = await res.json();
+    if (!res.ok) return;
+    const cfg = data.config || {};
+    const enabled = $("aiEnabled");
+    const defModel = $("aiDefaultModel");
+    const allowed = $("aiAllowedModels");
+    const limitUser = $("aiLimitPerUser");
+    const limitDept = $("aiLimitPerDept");
+    if (enabled) enabled.value = cfg.enabled !== false ? "true" : "false";
+    if (defModel) defModel.value = cfg.defaultModel || "deepseek-chat";
+    if (allowed) allowed.value = Array.isArray(cfg.allowedModels) ? cfg.allowedModels.join(",") : "deepseek-chat,deepseek-reasoner";
+    if (limitUser) limitUser.value = cfg.limitPerUser || 0;
+    if (limitDept) limitDept.value = cfg.limitPerDept || 0;
+    const logPanel = $("aiLogPanel");
+    if (logPanel) logPanel.innerHTML = '<div class="empty">点击「刷新日志」查看调用记录</div>';
+  } catch (_) {}
+}
+
+async function saveAiConfig() {
+  const enabled = $("aiEnabled")?.value === "true";
+  const defaultModel = $("aiDefaultModel")?.value.trim() || "deepseek-chat";
+  const allowedModels = ($("aiAllowedModels")?.value || "").split(",").map(s => s.trim()).filter(Boolean);
+  const limitPerUser = Number($("aiLimitPerUser")?.value) || 0;
+  const limitPerDept = Number($("aiLimitPerDept")?.value) || 0;
+  try {
+    const res = await fetch("/api/admin/ai-config", {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled, defaultModel, allowedModels, limitPerUser, limitPerDept }),
+    });
+    const data = await res.json();
+    showToast(res.ok ? "AI 配置已保存" : (data.error || "保存失败"));
+  } catch (e) {
+    showToast("请求失败：" + e.message);
+  }
+}
+
+async function loadAiLogs() {
+  const logPanel = $("aiLogPanel");
+  if (!logPanel) return;
+  logPanel.innerHTML = '<div class="empty">加载中...</div>';
+  try {
+    const res = await fetch("/api/admin/ai-logs", { credentials: "include" });
+    const data = await res.json();
+    if (!res.ok) { logPanel.innerHTML = `<div class="empty">加载失败</div>`; return; }
+    const logs = data.logs || [];
+    if (logs.length === 0) { logPanel.innerHTML = '<div class="empty">暂无调用记录</div>'; return; }
+    logPanel.innerHTML = logs.map(l => {
+      const t = l.ts ? new Date(l.ts).toLocaleString("zh-CN") : "-";
+      return `<div style="padding:3px 0;border-bottom:1px solid #e2e8f0;">${t} · <strong>${escapeHtml(l.username)}</strong> [${escapeHtml(l.dept || "-")}] · ${escapeHtml(l.model || "-")} · ${escapeHtml(l.action || "-")} · ${l.ms || 0}ms</div>`;
+    }).join('');
+  } catch (e) {
+    logPanel.innerHTML = `<div class="empty">请求失败</div>`;
+  }
+}
+
 (async function init() {
   const redirected = await resetClientCacheIfRequested();
   if (redirected) return;
@@ -802,6 +933,7 @@ function bindEvents() {
   if (currentSession) {
     await fetchDocuments();
     await fetchUsersIfNeeded();
+    startHeartbeat();
   } else {
     renderDocuments();
   }

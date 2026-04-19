@@ -191,7 +191,7 @@ function appendAiLog(entry) {
     if (fs.existsSync(AI_LOGS_FILE)) logs = JSON.parse(fs.readFileSync(AI_LOGS_FILE, "utf8"));
   } catch (_) {}
   logs.push({ ts: new Date().toISOString(), ...entry });
-  if (logs.length > 2000) logs = logs.slice(-2000);
+  if (logs.length > 500) logs = logs.slice(-500);
   try { fs.writeFileSync(AI_LOGS_FILE, JSON.stringify(logs)); } catch (_) {}
 }
 

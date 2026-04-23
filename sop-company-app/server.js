@@ -2707,6 +2707,90 @@ async function handleApi(req, url, res) {
     }
     return true;
   }
+  // ─── 分页坐标计算（Puppeteer print 模式）──────────────────────────────────────
+  if (req.method === "POST" && apiPath === "/api/page-breaks") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    let body;
+    try {
+      const raw = await readBody(req);
+      body = JSON.parse(raw);
+    } catch (_) {
+      sendJson(res, 400, { error: "Invalid request body" });
+      return true;
+    }
+    const { html } = body || {};
+    if (!html || typeof html !== "string") {
+      sendJson(res, 400, { error: "html field required" });
+      return true;
+    }
+
+    let browser;
+    try {
+      let puppeteer;
+      try { puppeteer = require("puppeteer"); }
+      catch (_) {
+        sendJson(res, 503, { error: "Puppeteer 未安装，请在服务器执行: npm install puppeteer" });
+        return true;
+      }
+
+      browser = await puppeteer.launch({
+        headless: "new",
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+        ],
+      });
+
+      const page = await browser.newPage();
+      await page.emulateMediaType("print");
+      await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 30000 });
+
+      // 移除不参与布局的元素
+      await page.evaluate(() => {
+        document.querySelectorAll(".no-print, .page-break-ruler").forEach((el) => el.remove());
+      });
+
+      const result = await page.evaluate(() => {
+        const ref = document.createElement("div");
+        ref.style.cssText = "position:fixed;top:0;left:0;width:1mm;height:1mm;visibility:hidden;pointer-events:none;";
+        document.body.appendChild(ref);
+        const pxPerMm = ref.offsetWidth || 3.7795;
+        document.body.removeChild(ref);
+
+        const pages = [];
+        document.querySelectorAll(".a4-page, .a4-page-landscape").forEach((el, index) => {
+          const isLandscape = el.classList.contains("a4-page-landscape");
+          const printPageH = isLandscape ? 180 : 267;
+          const heightMm = el.scrollHeight / pxPerMm;
+
+          const breaksAtMm = [];
+          for (let y = printPageH; y < heightMm - 0.5; y += printPageH) {
+            breaksAtMm.push(Math.round(y * 100) / 100);
+          }
+
+          pages.push({
+            index,
+            isLandscape,
+            printHeightMm: Math.round(heightMm * 100) / 100,
+            breaksAtMm,
+          });
+        });
+
+        return { pages };
+      });
+
+      sendJson(res, 200, result);
+    } catch (e) {
+      console.error("[Page Breaks]", e.message);
+      if (!res.headersSent) sendJson(res, 500, { error: "计算分页失败：" + e.message });
+    } finally {
+      if (browser) await browser.close().catch(() => {});
+    }
+    return true;
+  }
   // ─────────────────────────────────────────────────────────────────────────────
 
   return false;

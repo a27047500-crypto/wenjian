@@ -1157,6 +1157,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             <button type="button" class="top-ribbon-btn" onclick="window.exportWordDoc()">导出DOC</button>
             <button type="button" class="top-ribbon-btn" onclick="document.getElementById('import-json-input').click()">导入JSON</button>
             <button type="button" class="top-ribbon-btn primary" onclick="window.printPreCheck()">导出PDF</button>
+            <button type="button" class="top-ribbon-btn" style="background:#0f766e;color:#fff;border-color:#0f766e;" onclick="window.exportPdfServer()">服务端PDF(测试)</button>
         </div>
         <div class="top-ribbon-group">
             <span class="top-ribbon-title">批注</span>
@@ -3737,6 +3738,54 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             window.fixFlowchartState();
             window.showToast('系统已准备就绪。横纵向纸张将自动混排适配！');
             setTimeout(() => { window.print(); }, 300);
+        };
+
+        window.exportPdfServer = async function() {
+            // 先做和 printPreCheck 一样的准备工作，确保页面状态是"打印就绪"
+            window.clearTableSelection();
+            window.prepareHTMLState();
+            window.recalculatePages();
+            window.recalcParaNumbers();
+            window.recalcSipocNumbers();
+            window.recalcWorkContentNumbers();
+            window.bakeTableWidths();
+            window.fixFlowchartState();
+
+            // 读取文件标题作为文件名
+            const titleEl = document.querySelector('h1.page-title');
+            const filename = (titleEl?.textContent?.trim() || '文件') + '.pdf';
+
+            window.showToast('正在生成 PDF，请稍候...');
+
+            try {
+                // 序列化完整 HTML（含内联样式），Puppeteer 服务端重新渲染
+                const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+
+                const resp = await fetch('/api/export-pdf', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ html, filename })
+                });
+
+                if (!resp.ok) {
+                    let msg = 'HTTP ' + resp.status;
+                    try { const j = await resp.json(); msg = j.error || msg; } catch(_) {}
+                    window.showToast('PDF 生成失败：' + msg);
+                    return;
+                }
+
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+                window.showToast('✅ PDF 已生成，正在下载');
+            } catch (e) {
+                window.showToast('PDF 出错：' + e.message);
+            }
         };
 
         window.exportSnapshot = function() {

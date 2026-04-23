@@ -2637,6 +2637,78 @@ async function handleApi(req, url, res) {
     return true;
   }
 
+  // ─── PDF 导出（Puppeteer 服务端渲染）───────────────────────────────────────
+  if (req.method === "POST" && apiPath === "/api/export-pdf") {
+    const user = requireAuth(req, res);
+    if (!user) return true;
+    let body;
+    try {
+      const raw = await readBody(req);
+      body = JSON.parse(raw);
+    } catch (_) {
+      sendJson(res, 400, { error: "Invalid request body" });
+      return true;
+    }
+    const { html, filename } = body || {};
+    if (!html || typeof html !== "string") {
+      sendJson(res, 400, { error: "html field required" });
+      return true;
+    }
+
+    let browser;
+    try {
+      // 延迟加载 puppeteer，避免未安装时影响启动
+      let puppeteer;
+      try { puppeteer = require("puppeteer"); }
+      catch (_) {
+        sendJson(res, 503, { error: "Puppeteer 未安装，请在服务器执行: npm install puppeteer" });
+        return true;
+      }
+
+      browser = await puppeteer.launch({
+        headless: "new",
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+        ],
+      });
+
+      const page = await browser.newPage();
+      // 禁用 JS，只需要 HTML+CSS 渲染，防止页面脚本执行出错
+      await page.setJavaScriptEnabled(false);
+      // 触发 @media print 样式
+      await page.emulateMediaType("print");
+      await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 30000 });
+
+      const pdfBuffer = await page.pdf({
+        printBackground: true,
+        preferCSSPageSize: true, // 尊重 CSS @page { size: A4 portrait/landscape }
+        margin: { top: "0", bottom: "0", left: "0", right: "0" }, // 由 CSS @page margin 控制
+      });
+
+      const safe = String(filename || "document")
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
+        .replace(/\.pdf$/i, "");
+      const disposition = `attachment; filename*=UTF-8''${encodeURIComponent(safe + ".pdf")}`;
+
+      res.writeHead(200, {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": disposition,
+        "Content-Length": pdfBuffer.length,
+      });
+      res.end(pdfBuffer);
+    } catch (e) {
+      console.error("[PDF Export]", e.message);
+      if (!res.headersSent) sendJson(res, 500, { error: "PDF 生成失败：" + e.message });
+    } finally {
+      if (browser) await browser.close().catch(() => {});
+    }
+    return true;
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
+
   return false;
 }
 

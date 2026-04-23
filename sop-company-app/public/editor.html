@@ -3782,6 +3782,13 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 var cfg = page.classList.contains('a4-page-landscape') ? LANDSCAPE : PORTRAIT;
                 var pageHMm = scrollHeightToMm(page);
 
+                // box-sizing:border-box → min-height:297mm 含 padding
+                // 实际内容高 = scrollHeight - topPad - bottomPad
+                // 打印单页容量 = printH (267mm)
+                // 只有 scrollHeight > printH + 2×topPad 时内容才真正溢出
+                var overflowThreshMm = cfg.printH + 2 * cfg.topPad; // 竖:317mm 横:220mm
+                if (pageHMm <= overflowThreshMm + 0.5) return;      // 内容未溢出，无需画线
+
                 var yMm = cfg.topPad + cfg.printH;  // 第一条分页线位置
                 var n   = 1;
 
